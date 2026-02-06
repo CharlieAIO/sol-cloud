@@ -2,33 +2,28 @@
 set -euo pipefail
 
 SLOTS_PER_EPOCH="{{ .Validator.SlotsPerEpoch }}"
-CLOCK_MULTIPLIER="{{ .Validator.ClockMultiplier }}"
+TICKS_PER_SLOT="{{ .Validator.TicksPerSlot }}"
 COMPUTE_UNIT_LIMIT="{{ .Validator.ComputeUnitLimit }}"
+LEDGER_LIMIT_SIZE="{{ .Validator.LedgerLimitSize }}"
 
 supports_flag() {
   local flag="$1"
   solana-test-validator --help 2>&1 | grep -q -- "$flag"
 }
 
-ticks_per_slot=64
-if [ "$CLOCK_MULTIPLIER" -gt 1 ]; then
-  ticks_per_slot=$((64 / CLOCK_MULTIPLIER))
-  if [ "$ticks_per_slot" -lt 1 ]; then
-    ticks_per_slot=1
-  fi
-fi
-
 args=(
   --ledger /var/lib/solana/ledger
   --bind-address 0.0.0.0
   --reset
   --url https://api.mainnet-beta.solana.com
-  --limit-ledger-size 10000
+  --limit-ledger-size "$LEDGER_LIMIT_SIZE"
   --slots-per-epoch "$SLOTS_PER_EPOCH"
 )
 
 if supports_flag --ticks-per-slot; then
-  args+=(--ticks-per-slot "$ticks_per_slot")
+  args+=(--ticks-per-slot "$TICKS_PER_SLOT")
+else
+  echo "warning: this solana-test-validator build does not support --ticks-per-slot; continuing without it" >&2
 fi
 
 if supports_flag --compute-unit-limit; then
@@ -36,6 +31,22 @@ if supports_flag --compute-unit-limit; then
 else
   echo "warning: this solana-test-validator build does not support --compute-unit-limit; continuing without it" >&2
 fi
+
+{{- range .Validator.CloneAccounts }}
+if supports_flag --clone; then
+  args+=(--clone "{{ . }}")
+else
+  echo "warning: this solana-test-validator build does not support --clone; continuing without clone accounts" >&2
+fi
+{{- end }}
+
+{{- range .Validator.CloneUpgradeablePrograms }}
+if supports_flag --clone-upgradeable-program; then
+  args+=(--clone-upgradeable-program "{{ . }}")
+else
+  echo "warning: this solana-test-validator build does not support --clone-upgradeable-program; continuing without clone upgradeable programs" >&2
+fi
+{{- end }}
 
 solana-test-validator "${args[@]}" &
 validator_pid=$!

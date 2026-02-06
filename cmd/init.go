@@ -13,8 +13,11 @@ var (
 	initAppName          string
 	initRegion           string
 	initSlotsPerEpoch    uint64
-	initClockMultiplier  uint64
+	initTicksPerSlot     uint64
 	initComputeUnitLimit uint64
+	initLedgerLimitSize  uint64
+	initCloneAccounts    []string
+	initCloneUpPrograms  []string
 	initForce            bool
 )
 
@@ -24,7 +27,8 @@ var initCmd = &cobra.Command{
 	Long:  "Create a .sol-cloud.yml starter file in the current directory.",
 	Example: `  sol-cloud init
   sol-cloud init --app-name my-validator --region ord
-  sol-cloud init --slots-per-epoch 216000 --clock-multiplier 2 --compute-unit-limit 300000
+  sol-cloud init --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000 --ledger-limit-size 10000
+  sol-cloud init --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
   sol-cloud init --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		const file = ".sol-cloud.yml"
@@ -37,11 +41,20 @@ var initCmd = &cobra.Command{
 		if initSlotsPerEpoch > 0 {
 			cfg.SlotsPerEpoch = initSlotsPerEpoch
 		}
-		if initClockMultiplier > 0 {
-			cfg.ClockMultiplier = initClockMultiplier
+		if initTicksPerSlot > 0 {
+			cfg.TicksPerSlot = initTicksPerSlot
 		}
 		if initComputeUnitLimit > 0 {
 			cfg.ComputeUnitLimit = initComputeUnitLimit
+		}
+		if initLedgerLimitSize > 0 {
+			cfg.LedgerLimitSize = initLedgerLimitSize
+		}
+		if initCloneAccounts != nil {
+			cfg.CloneAccounts = append([]string(nil), initCloneAccounts...)
+		}
+		if initCloneUpPrograms != nil {
+			cfg.CloneUpgradeablePrograms = append([]string(nil), initCloneUpPrograms...)
 		}
 		cfg.ApplyDefaults()
 		if err := cfg.Validate(); err != nil {
@@ -55,15 +68,22 @@ var initCmd = &cobra.Command{
 		appName := strings.TrimSpace(initAppName)
 		escapedAppName := strings.ReplaceAll(appName, `"`, `\"`)
 		escapedRegion := strings.ReplaceAll(region, `"`, `\"`)
+		cloneAccountsYAML := renderYAMLStringList(cfg.CloneAccounts, "    ")
+		cloneProgramsYAML := renderYAMLStringList(cfg.CloneUpgradeablePrograms, "    ")
 
 		starter := fmt.Sprintf(`provider: fly
 app_name: "%s"
 region: "%s"
 validator:
   slots_per_epoch: %d
-  clock_multiplier: %d
+  ticks_per_slot: %d
   compute_unit_limit: %d
-`, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.ClockMultiplier, cfg.ComputeUnitLimit)
+  ledger_limit_size: %d
+  clone_accounts:
+%s
+  clone_upgradeable_programs:
+%s
+`, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneAccountsYAML, cloneProgramsYAML)
 
 		if err := os.WriteFile(file, []byte(starter), 0o644); err != nil {
 			return fmt.Errorf("write config: %w", err)
@@ -80,7 +100,22 @@ func init() {
 	initCmd.Flags().StringVar(&initAppName, "app-name", "", "Default Fly app name to write into config")
 	initCmd.Flags().StringVar(&initRegion, "region", "ord", "Default Fly region to write into config")
 	initCmd.Flags().Uint64Var(&initSlotsPerEpoch, "slots-per-epoch", validator.DefaultSlotsPerEpoch, "validator slots per epoch")
-	initCmd.Flags().Uint64Var(&initClockMultiplier, "clock-multiplier", validator.DefaultClockMultiplier, "validator clock multiplier")
+	initCmd.Flags().Uint64Var(&initTicksPerSlot, "ticks-per-slot", validator.DefaultTicksPerSlot, "validator ticks per slot")
 	initCmd.Flags().Uint64Var(&initComputeUnitLimit, "compute-unit-limit", validator.DefaultComputeUnitLimit, "validator compute unit limit")
+	initCmd.Flags().Uint64Var(&initLedgerLimitSize, "ledger-limit-size", validator.DefaultLedgerLimitSize, "validator ledger limit size")
+	initCmd.Flags().StringSliceVar(&initCloneAccounts, "clone", nil, "repeatable account pubkey(s) to add as validator.clone_accounts")
+	initCmd.Flags().StringSliceVar(&initCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to add as validator.clone_upgradeable_programs")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite .sol-cloud.yml if it already exists")
+}
+
+func renderYAMLStringList(values []string, indent string) string {
+	if len(values) == 0 {
+		return indent + "[]"
+	}
+	lines := make([]string, 0, len(values))
+	for _, value := range values {
+		escaped := strings.ReplaceAll(value, `"`, `\"`)
+		lines = append(lines, fmt.Sprintf("%s- \"%s\"", indent, escaped))
+	}
+	return strings.Join(lines, "\n")
 }

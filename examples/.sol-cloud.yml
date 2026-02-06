@@ -3,5 +3,8 @@ app_name: demo-sol-cloud-validator
 region: "ord"
 validator:
   slots_per_epoch: 432000
-  clock_multiplier: 1
+  ticks_per_slot: 64
   compute_unit_limit: 200000
+  ledger_limit_size: 10000
+  clone_accounts: []
+  clone_upgradeable_programs: []

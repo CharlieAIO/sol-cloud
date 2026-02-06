@@ -47,9 +47,12 @@ type flyTemplateData struct {
 }
 
 type flyValidatorTemplateData struct {
-	SlotsPerEpoch    uint64
-	ClockMultiplier  uint64
-	ComputeUnitLimit uint64
+	SlotsPerEpoch            uint64
+	TicksPerSlot             uint64
+	ComputeUnitLimit         uint64
+	LedgerLimitSize          uint64
+	CloneAccounts            []string
+	CloneUpgradeablePrograms []string
 }
 
 func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, error) {
@@ -85,9 +88,12 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		Name:   cfg.Name,
 		Region: cfg.Region,
 		Validator: flyValidatorTemplateData{
-			SlotsPerEpoch:    cfg.Validator.SlotsPerEpoch,
-			ClockMultiplier:  cfg.Validator.ClockMultiplier,
-			ComputeUnitLimit: cfg.Validator.ComputeUnitLimit,
+			SlotsPerEpoch:            cfg.Validator.SlotsPerEpoch,
+			TicksPerSlot:             cfg.Validator.TicksPerSlot,
+			ComputeUnitLimit:         cfg.Validator.ComputeUnitLimit,
+			LedgerLimitSize:          cfg.Validator.LedgerLimitSize,
+			CloneAccounts:            append([]string(nil), cfg.Validator.CloneAccounts...),
+			CloneUpgradeablePrograms: append([]string(nil), cfg.Validator.CloneUpgradeablePrograms...),
 		},
 	}
 

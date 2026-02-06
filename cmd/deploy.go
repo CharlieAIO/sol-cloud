@@ -22,8 +22,11 @@ var (
 	deployHealthCheckTimeout time.Duration
 	deployHealthCheckPoll    time.Duration
 	deploySlotsPerEpoch      uint64
-	deployClockMultiplier    uint64
+	deployTicksPerSlot       uint64
 	deployComputeUnitLimit   uint64
+	deployLedgerLimitSize    uint64
+	deployCloneAccounts      []string
+	deployCloneUpPrograms    []string
 )
 
 var deployCmd = &cobra.Command{
@@ -33,7 +36,8 @@ var deployCmd = &cobra.Command{
 	Example: `  sol-cloud deploy --name my-validator
   sol-cloud deploy --dry-run --name my-validator
   sol-cloud deploy --name my-validator --region ord --health-timeout 4m
-  sol-cloud deploy --name my-validator --slots-per-epoch 216000 --clock-multiplier 2 --compute-unit-limit 300000`,
+  sol-cloud deploy --name my-validator --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000
+  sol-cloud deploy --name my-validator --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		providerName := strings.ToLower(strings.TrimSpace(viper.GetString("provider")))
 		if providerName == "" {
@@ -65,19 +69,31 @@ var deployCmd = &cobra.Command{
 		}
 
 		validatorCfg := validator.Config{
-			SlotsPerEpoch:    viper.GetUint64("validator.slots_per_epoch"),
-			ClockMultiplier:  viper.GetUint64("validator.clock_multiplier"),
-			ComputeUnitLimit: viper.GetUint64("validator.compute_unit_limit"),
+			SlotsPerEpoch:            viper.GetUint64("validator.slots_per_epoch"),
+			TicksPerSlot:             viper.GetUint64("validator.ticks_per_slot"),
+			ComputeUnitLimit:         viper.GetUint64("validator.compute_unit_limit"),
+			LedgerLimitSize:          viper.GetUint64("validator.ledger_limit_size"),
+			CloneAccounts:            viper.GetStringSlice("validator.clone_accounts"),
+			CloneUpgradeablePrograms: viper.GetStringSlice("validator.clone_upgradeable_programs"),
 		}
 		validatorCfg.ApplyDefaults()
 		if deploySlotsPerEpoch > 0 {
 			validatorCfg.SlotsPerEpoch = deploySlotsPerEpoch
 		}
-		if deployClockMultiplier > 0 {
-			validatorCfg.ClockMultiplier = deployClockMultiplier
+		if deployTicksPerSlot > 0 {
+			validatorCfg.TicksPerSlot = deployTicksPerSlot
 		}
 		if deployComputeUnitLimit > 0 {
 			validatorCfg.ComputeUnitLimit = deployComputeUnitLimit
+		}
+		if deployLedgerLimitSize > 0 {
+			validatorCfg.LedgerLimitSize = deployLedgerLimitSize
+		}
+		if cmd.Flags().Changed("clone") {
+			validatorCfg.CloneAccounts = append([]string(nil), deployCloneAccounts...)
+		}
+		if cmd.Flags().Changed("clone-upgradeable-program") {
+			validatorCfg.CloneUpgradeablePrograms = append([]string(nil), deployCloneUpPrograms...)
 		}
 		if err := validatorCfg.Validate(); err != nil {
 			return fmt.Errorf("invalid validator config: %w", err)
@@ -109,8 +125,14 @@ var deployCmd = &cobra.Command{
 			fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d clock_multiplier=%d compute_unit_limit=%d\n",
-				validatorCfg.SlotsPerEpoch, validatorCfg.ClockMultiplier, validatorCfg.ComputeUnitLimit)
+			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
+				validatorCfg.SlotsPerEpoch,
+				validatorCfg.TicksPerSlot,
+				validatorCfg.ComputeUnitLimit,
+				validatorCfg.LedgerLimitSize,
+				len(validatorCfg.CloneAccounts),
+				len(validatorCfg.CloneUpgradeablePrograms),
+			)
 			return nil
 		}
 
@@ -119,8 +141,14 @@ var deployCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
-		fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d clock_multiplier=%d compute_unit_limit=%d\n",
-			validatorCfg.SlotsPerEpoch, validatorCfg.ClockMultiplier, validatorCfg.ComputeUnitLimit)
+		fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
+			validatorCfg.SlotsPerEpoch,
+			validatorCfg.TicksPerSlot,
+			validatorCfg.ComputeUnitLimit,
+			validatorCfg.LedgerLimitSize,
+			len(validatorCfg.CloneAccounts),
+			len(validatorCfg.CloneUpgradeablePrograms),
+		)
 
 		state, err := appconfig.LoadState(projectDir)
 		if err != nil {
@@ -156,6 +184,9 @@ func init() {
 	deployCmd.Flags().DurationVar(&deployHealthCheckTimeout, "health-timeout", 3*time.Minute, "maximum wait for RPC health")
 	deployCmd.Flags().DurationVar(&deployHealthCheckPoll, "health-interval", 5*time.Second, "poll interval for RPC health checks")
 	deployCmd.Flags().Uint64Var(&deploySlotsPerEpoch, "slots-per-epoch", 0, "override validator.slots_per_epoch")
-	deployCmd.Flags().Uint64Var(&deployClockMultiplier, "clock-multiplier", 0, "override validator.clock_multiplier")
+	deployCmd.Flags().Uint64Var(&deployTicksPerSlot, "ticks-per-slot", 0, "override validator.ticks_per_slot")
 	deployCmd.Flags().Uint64Var(&deployComputeUnitLimit, "compute-unit-limit", 0, "override validator.compute_unit_limit")
+	deployCmd.Flags().Uint64Var(&deployLedgerLimitSize, "ledger-limit-size", 0, "override validator.ledger_limit_size")
+	deployCmd.Flags().StringSliceVar(&deployCloneAccounts, "clone", nil, "repeatable account pubkey(s) to pass as --clone to solana-test-validator")
+	deployCmd.Flags().StringSliceVar(&deployCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to pass as --clone-upgradeable-program")
 }
