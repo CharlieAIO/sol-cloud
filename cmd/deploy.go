@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
@@ -13,9 +14,12 @@ import (
 )
 
 var (
-	deployName   string
-	deployRegion string
-	deployDryRun bool
+	deployName               string
+	deployRegion             string
+	deployDryRun             bool
+	deploySkipHealthCheck    bool
+	deployHealthCheckTimeout time.Duration
+	deployHealthCheckPoll    time.Duration
 )
 
 var deployCmd = &cobra.Command{
@@ -68,14 +72,20 @@ var deployCmd = &cobra.Command{
 		}
 
 		cfg := &providers.Config{
-			Name:       name,
-			Region:     region,
-			ProjectDir: projectDir,
-			Validator:  validatorCfg,
-			DryRun:     deployDryRun,
+			Name:                name,
+			Region:              region,
+			ProjectDir:          projectDir,
+			Validator:           validatorCfg,
+			DryRun:              deployDryRun,
+			SkipHealthCheck:     deploySkipHealthCheck,
+			HealthCheckTimeout:  deployHealthCheckTimeout,
+			HealthCheckInterval: deployHealthCheckPoll,
 		}
 
 		flyProvider := providers.NewFlyProvider()
+		if !deployDryRun {
+			fmt.Fprintln(cmd.OutOrStdout(), "deploying validator to Fly.io...")
+		}
 		deployment, err := flyProvider.Deploy(cmd.Context(), cfg)
 		if err != nil {
 			return err
@@ -95,6 +105,7 @@ var deployCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
+		fmt.Fprintf(cmd.OutOrStdout(), "tip:          solana config set --url %s\n", deployment.RPCURL)
 		return nil
 	},
 }
@@ -105,4 +116,7 @@ func init() {
 	deployCmd.Flags().StringVar(&deployName, "name", "", "Fly app name (overrides app_name in config)")
 	deployCmd.Flags().StringVar(&deployRegion, "region", "", "Fly region (overrides region in config)")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "render files but skip flyctl deployment")
+	deployCmd.Flags().BoolVar(&deploySkipHealthCheck, "skip-health-check", false, "skip post-deploy RPC health validation")
+	deployCmd.Flags().DurationVar(&deployHealthCheckTimeout, "health-timeout", 3*time.Minute, "maximum wait for RPC health")
+	deployCmd.Flags().DurationVar(&deployHealthCheckPoll, "health-interval", 5*time.Second, "poll interval for RPC health checks")
 }

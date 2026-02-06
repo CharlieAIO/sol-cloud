@@ -2,17 +2,21 @@ package providers
 
 import (
 	"context"
+	"time"
 
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
 )
 
 // Config captures provider-agnostic deployment inputs.
 type Config struct {
-	Name       string
-	Region     string
-	ProjectDir string
-	Validator  validator.Config
-	DryRun     bool
+	Name                string
+	Region              string
+	ProjectDir          string
+	Validator           validator.Config
+	DryRun              bool
+	SkipHealthCheck     bool
+	HealthCheckTimeout  time.Duration
+	HealthCheckInterval time.Duration
 }
 
 // Deployment includes canonical endpoints for a deployed validator.
