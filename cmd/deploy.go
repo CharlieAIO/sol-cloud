@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -15,7 +14,6 @@ import (
 )
 
 var (
-	deployName               string
 	deployRegion             string
 	deployDryRun             bool
 	deploySkipHealthCheck    bool
@@ -36,13 +34,13 @@ var (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a validator to Fly.io",
-	Long:  "Render deployment artifacts and deploy a Solana validator to Fly.io.",
-	Example: `  sol-cloud deploy --name my-validator
-  sol-cloud deploy --dry-run --name my-validator
-  sol-cloud deploy --name my-validator --region ord --health-timeout 4m
-  sol-cloud deploy --name my-validator --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000
-  sol-cloud deploy --name my-validator --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
-  sol-cloud deploy --name my-validator --program-so ./programs/my_program.so --program-id-keypair ./keys/program-keypair.json --upgrade-authority ./keys/upgrade-authority.json`,
+	Long:  "Render deployment artifacts and deploy a Solana validator to Fly.io using app_name from .sol-cloud.yml.",
+	Example: `  sol-cloud deploy
+  sol-cloud deploy --dry-run
+  sol-cloud deploy --region ord --health-timeout 4m
+  sol-cloud deploy --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000
+  sol-cloud deploy --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
+  sol-cloud deploy --program-so ./programs/my_program.so --program-id-keypair ./keys/program-keypair.json --upgrade-authority ./keys/upgrade-authority.json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		providerName := strings.ToLower(strings.TrimSpace(viper.GetString("provider")))
 		if providerName == "" {
@@ -52,12 +50,13 @@ var deployCmd = &cobra.Command{
 			return fmt.Errorf("unsupported provider %q: only fly is enabled", providerName)
 		}
 
-		name := strings.TrimSpace(deployName)
+		name := strings.TrimSpace(viper.GetString("app_name"))
 		if name == "" {
-			name = strings.TrimSpace(viper.GetString("app_name"))
+			return fmt.Errorf("app_name is required in .sol-cloud.yml; run `sol-cloud init` first")
 		}
-		if name == "" {
-			return errors.New("app name is required (set --name or app_name in .sol-cloud.yml)")
+		name, err := ensureFlyAppName(name)
+		if err != nil {
+			return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
 		}
 
 		region := strings.TrimSpace(deployRegion)
@@ -217,7 +216,6 @@ var deployCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(deployCmd)
 
-	deployCmd.Flags().StringVar(&deployName, "name", "", "Fly app name (overrides app_name in config)")
 	deployCmd.Flags().StringVar(&deployRegion, "region", "", "Fly region (overrides region in config)")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "render files but skip flyctl deployment")
 	deployCmd.Flags().BoolVar(&deploySkipHealthCheck, "skip-health-check", false, "skip post-deploy RPC health validation")

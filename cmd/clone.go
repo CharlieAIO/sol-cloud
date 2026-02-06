@@ -42,8 +42,8 @@ var cloneCmd = &cobra.Command{
 	Example: `  sol-cloud clone-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
   sol-cloud clone-program <program-id> --source-rpc https://api.mainnet-beta.solana.com --out ./artifacts/program.so
   sol-cloud clone-program <program-id> --account EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-  sol-cloud clone-program <program-id> --deploy --name my-validator
-  sol-cloud clone-program <program-id> --deploy --target-rpc https://my-validator.fly.dev --keypair ~/.config/solana/id.json`,
+  sol-cloud clone-program <program-id> --deploy
+  sol-cloud clone-program <program-id> --deploy --target-rpc https://sol-cloud-1a2b3c4d.fly.dev --keypair ~/.config/solana/id.json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		programID := strings.TrimSpace(args[0])

@@ -1,5 +1,5 @@
 provider: fly
-app_name: demo-sol-cloud-validator
+app_name: sol-cloud-1a2b3c4d
 region: "ord"
 validator:
   slots_per_epoch: 432000

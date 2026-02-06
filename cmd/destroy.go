@@ -23,8 +23,7 @@ var destroyCmd = &cobra.Command{
 	Short: "Destroy a deployed validator",
 	Long:  "Destroy a deployed validator and tear down cloud resources.",
 	Example: `  sol-cloud destroy
-  sol-cloud destroy --name my-validator
-  sol-cloud destroy my-validator --yes`,
+  sol-cloud destroy --yes`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := strings.TrimSpace(destroyName)

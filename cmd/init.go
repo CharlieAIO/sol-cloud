@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -43,10 +42,11 @@ var initCmd = &cobra.Command{
 		fmt.Fprintln(out, "Press Enter to accept defaults.")
 		fmt.Fprintln(out)
 
-		appName, err := promptString(reader, out, "Fly app name", defaultAppName(), true)
+		appName, err := generateFlyAppName()
 		if err != nil {
 			return err
 		}
+		fmt.Fprintf(out, "Fly app name: %s\n", appName)
 		region, err := promptString(reader, out, "Fly region", "ord", true)
 		if err != nil {
 			return err
@@ -260,39 +260,4 @@ func promptUint64(reader *bufio.Reader, out io.Writer, label string, defaultValu
 		}
 		return parsed, nil
 	}
-}
-
-func defaultAppName() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "sol-cloud-validator"
-	}
-
-	base := strings.ToLower(filepath.Base(wd))
-	var b strings.Builder
-	lastDash := false
-	for _, r := range base {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			lastDash = false
-			continue
-		}
-		if !lastDash {
-			b.WriteByte('-')
-			lastDash = true
-		}
-	}
-
-	clean := strings.Trim(b.String(), "-")
-	if clean == "" {
-		return "sol-cloud-validator"
-	}
-	if len(clean) > 40 {
-		clean = clean[:40]
-		clean = strings.Trim(clean, "-")
-	}
-	if clean == "" {
-		return "sol-cloud-validator"
-	}
-	return clean
 }
