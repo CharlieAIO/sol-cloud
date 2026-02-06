@@ -1,0 +1,7 @@
+provider: fly
+app_name: demo-sol-cloud-validator
+region: "ord"
+validator:
+  slots_per_epoch: 432000
+  clock_multiplier: 1
+  compute_unit_limit: 200000
