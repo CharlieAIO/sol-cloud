@@ -1,13 +1,16 @@
-# Binaries
 bin/
 dist/
+
+.tmp-go-cache
+
 
 # Sol-Cloud local artifacts
 .sol-cloud/
 .sol-cloud.local.yml
+.sol-cloud.yml
 *.log
 
-# OS/editor
 .DS_Store
 .vscode/
 .idea/
+

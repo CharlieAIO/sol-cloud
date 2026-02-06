@@ -1,0 +1,132 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - run: go test ./...
+
+  build-and-release:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+            archive: zip
+          - goos: windows
+            goarch: arm64
+            ext: ".exe"
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build archive
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME}"
+          OUT_DIR="dist/${{ matrix.goos }}_${{ matrix.goarch }}"
+          BIN_NAME="sol-cloud${{ matrix.ext }}"
+          mkdir -p "$OUT_DIR"
+
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build \
+            -ldflags "-s -w -X github.com/CharlieAIO/sol-cloud/cmd.version=${GITHUB_REF_NAME}" \
+            -o "$OUT_DIR/$BIN_NAME" .
+
+          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
+            tar -C "$OUT_DIR" -czf "dist/sol-cloud_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" "$BIN_NAME"
+          else
+            (cd "$OUT_DIR" && zip "../../sol-cloud_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip" "$BIN_NAME")
+          fi
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/sol-cloud_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive }}
+
+  update-homebrew-formula:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Update formula for release tag
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          URL="https://github.com/CharlieAIO/sol-cloud/archive/refs/tags/${TAG}.tar.gz"
+
+          curl -fL "$URL" -o /tmp/sol-cloud-src.tar.gz
+          SHA256="$(sha256sum /tmp/sol-cloud-src.tar.gz | awk '{print $1}')"
+
+          cat > Formula/sol-cloud.rb <<EOF
+          class SolCloud < Formula
+            desc "Deploy shared Solana test validators to Fly.io"
+            homepage "https://github.com/CharlieAIO/sol-cloud"
+            url "${URL}"
+            version "${VERSION}"
+            sha256 "${SHA256}"
+            license "MIT"
+            head "https://github.com/CharlieAIO/sol-cloud.git", branch: "main"
+
+            depends_on "go" => :build
+
+            def install
+              ldflags = %W[
+                -s -w
+                -X github.com/CharlieAIO/sol-cloud/cmd.version=v#{version}
+              ]
+              system "go", "build", *std_go_args(ldflags:), "."
+            end
+
+            test do
+              output = shell_output("#{bin}/sol-cloud --help")
+              assert_match "Deploy Solana validators", output
+            end
+          end
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- Formula/sol-cloud.rb; then
+            git add Formula/sol-cloud.rb
+            git commit -m "chore(homebrew): update formula for ${TAG}"
+            git push origin HEAD:main
+          fi
