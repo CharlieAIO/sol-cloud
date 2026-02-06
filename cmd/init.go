@@ -2,9 +2,11 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -13,6 +15,41 @@ import (
 )
 
 var initForce bool
+var errManualRegionSelection = errors.New("manual region selection requested")
+
+type flyRegionOption struct {
+	Code string
+	Name string
+}
+
+var flyRegionOptions = []flyRegionOption{
+	{Code: "ord", Name: "Chicago"},
+	{Code: "iad", Name: "Ashburn"},
+	{Code: "dfw", Name: "Dallas"},
+	{Code: "lax", Name: "Los Angeles"},
+	{Code: "sjc", Name: "San Jose"},
+	{Code: "sea", Name: "Seattle"},
+	{Code: "mia", Name: "Miami"},
+	{Code: "atl", Name: "Atlanta"},
+	{Code: "bos", Name: "Boston"},
+	{Code: "yyz", Name: "Toronto"},
+	{Code: "gru", Name: "Sao Paulo"},
+	{Code: "eze", Name: "Buenos Aires"},
+	{Code: "scl", Name: "Santiago"},
+	{Code: "lhr", Name: "London"},
+	{Code: "ams", Name: "Amsterdam"},
+	{Code: "fra", Name: "Frankfurt"},
+	{Code: "mad", Name: "Madrid"},
+	{Code: "cdg", Name: "Paris"},
+	{Code: "waw", Name: "Warsaw"},
+	{Code: "otp", Name: "Bucharest"},
+	{Code: "bom", Name: "Mumbai"},
+	{Code: "sin", Name: "Singapore"},
+	{Code: "nrt", Name: "Tokyo"},
+	{Code: "hkg", Name: "Hong Kong"},
+	{Code: "syd", Name: "Sydney"},
+	{Code: "jnb", Name: "Johannesburg"},
+}
 
 var initCmd = &cobra.Command{
 	Use:   "init",
@@ -47,7 +84,7 @@ var initCmd = &cobra.Command{
 			return err
 		}
 		fmt.Fprintf(out, "Fly app name: %s\n", appName)
-		region, err := promptString(reader, out, "Fly region", "ord", true)
+		region, err := promptFlyRegion(cmd.InOrStdin(), reader, out, "ord")
 		if err != nil {
 			return err
 		}
@@ -76,17 +113,27 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		cloneAccountsRaw, err := promptString(reader, out, "Clone account list (comma-separated, optional)", "", false)
+		cloneAccounts, err := promptStringList(
+			reader,
+			out,
+			"Clone account list (optional)",
+			"Clone account",
+		)
 		if err != nil {
 			return err
 		}
-		cfg.CloneAccounts = parseCSVList(cloneAccountsRaw)
+		cfg.CloneAccounts = cloneAccounts
 
-		cloneProgramsRaw, err := promptString(reader, out, "Clone upgradeable program list (comma-separated, optional)", "", false)
+		clonePrograms, err := promptStringList(
+			reader,
+			out,
+			"Clone upgradeable program list (optional)",
+			"Clone upgradeable program",
+		)
 		if err != nil {
 			return err
 		}
-		cfg.CloneUpgradeablePrograms = parseCSVList(cloneProgramsRaw)
+		cfg.CloneUpgradeablePrograms = clonePrograms
 
 		configureStartupDeploy, err := promptYesNo(reader, out, "Configure startup program deploy?", false)
 		if err != nil {
@@ -170,22 +217,6 @@ func renderYAMLStringList(values []string, indent string) string {
 	return strings.Join(lines, "\n")
 }
 
-func parseCSVList(input string) []string {
-	if strings.TrimSpace(input) == "" {
-		return []string{}
-	}
-	parts := strings.Split(input, ",")
-	values := make([]string, 0, len(parts))
-	for _, part := range parts {
-		value := strings.TrimSpace(part)
-		if value == "" {
-			continue
-		}
-		values = append(values, value)
-	}
-	return values
-}
-
 func promptString(reader *bufio.Reader, out io.Writer, label, defaultValue string, required bool) (string, error) {
 	for {
 		if strings.TrimSpace(defaultValue) == "" {
@@ -211,6 +242,24 @@ func promptString(reader *bufio.Reader, out io.Writer, label, defaultValue strin
 			continue
 		}
 		return value, nil
+	}
+}
+
+func promptStringList(reader *bufio.Reader, out io.Writer, title, itemLabel string) ([]string, error) {
+	values := make([]string, 0)
+	fmt.Fprintf(out, "%s\n", title)
+	fmt.Fprintln(out, "Press Enter on an empty line to finish.")
+
+	for {
+		value, err := promptString(reader, out, fmt.Sprintf("%s #%d", itemLabel, len(values)+1), "", false)
+		if err != nil {
+			return nil, err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return values, nil
+		}
+		values = append(values, value)
 	}
 }
 
@@ -260,4 +309,220 @@ func promptUint64(reader *bufio.Reader, out io.Writer, label string, defaultValu
 		}
 		return parsed, nil
 	}
+}
+
+func promptFlyRegion(in io.Reader, reader *bufio.Reader, out io.Writer, defaultRegion string) (string, error) {
+	defaultRegion = strings.ToLower(strings.TrimSpace(defaultRegion))
+	if defaultRegion == "" {
+		defaultRegion = "ord"
+	}
+
+	region, err := promptFlyRegionArrow(in, out, defaultRegion)
+	if err == nil {
+		return region, nil
+	}
+	if errors.Is(err, errManualRegionSelection) {
+		custom, promptErr := promptString(reader, out, "Custom Fly region code", defaultRegion, true)
+		if promptErr != nil {
+			return "", promptErr
+		}
+		return strings.ToLower(strings.TrimSpace(custom)), nil
+	}
+
+	// Fallback for non-interactive terminals: simple code input.
+	custom, promptErr := promptString(reader, out, "Fly region code", defaultRegion, true)
+	if promptErr != nil {
+		return "", promptErr
+	}
+	return strings.ToLower(strings.TrimSpace(custom)), nil
+}
+
+func promptFlyRegionArrow(in io.Reader, out io.Writer, defaultRegion string) (string, error) {
+	inFile, ok := in.(*os.File)
+	if !ok {
+		return "", errors.New("input is not a terminal file")
+	}
+	if _, ok := out.(*os.File); !ok {
+		return "", errors.New("output is not a terminal file")
+	}
+
+	restore, err := enableRawTerminalMode(inFile)
+	if err != nil {
+		return "", err
+	}
+	defer restore()
+
+	selected := findRegionIndex(defaultRegion)
+	if selected < 0 {
+		selected = 0
+	}
+	search := ""
+
+	fmt.Fprintln(out, "Fly region selector: ↑/↓ to move, Enter to confirm, type to filter, Backspace to edit, m for manual")
+	for {
+		drawCurrentRegion(out, selected, search)
+
+		key, text, readErr := readSelectionKey(inFile)
+		if readErr != nil {
+			return "", readErr
+		}
+
+		switch key {
+		case "up":
+			selected--
+			if selected < 0 {
+				selected = len(flyRegionOptions) - 1
+			}
+		case "down":
+			selected++
+			if selected >= len(flyRegionOptions) {
+				selected = 0
+			}
+		case "text":
+			search += text
+			if idx := findRegionMatch(search); idx >= 0 {
+				selected = idx
+			}
+		case "backspace":
+			if len(search) > 0 {
+				search = search[:len(search)-1]
+			}
+			if idx := findRegionMatch(search); idx >= 0 {
+				selected = idx
+			}
+		case "enter":
+			fmt.Fprint(out, "\r\n")
+			return flyRegionOptions[selected].Code, nil
+		case "manual":
+			fmt.Fprint(out, "\r\n")
+			return "", errManualRegionSelection
+		case "cancel":
+			fmt.Fprint(out, "\r\n")
+			return "", errors.New("init cancelled")
+		}
+	}
+}
+
+func drawCurrentRegion(out io.Writer, selected int, search string) {
+	option := flyRegionOptions[selected]
+	fmt.Fprintf(out, "\r\033[2KFly region: %s (%s)", option.Code, option.Name)
+	if strings.TrimSpace(search) != "" {
+		fmt.Fprintf(out, " | filter: %s", search)
+	}
+}
+
+func findRegionIndex(code string) int {
+	for i, option := range flyRegionOptions {
+		if option.Code == code {
+			return i
+		}
+	}
+	return -1
+}
+
+func findRegionMatch(query string) int {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return -1
+	}
+
+	for i, option := range flyRegionOptions {
+		if option.Code == query {
+			return i
+		}
+	}
+	for i, option := range flyRegionOptions {
+		if strings.HasPrefix(option.Code, query) {
+			return i
+		}
+	}
+	for i, option := range flyRegionOptions {
+		if strings.Contains(strings.ToLower(option.Name), query) {
+			return i
+		}
+	}
+	return -1
+}
+
+func readSelectionKey(inFile *os.File) (string, string, error) {
+	buf := make([]byte, 3)
+	n, err := inFile.Read(buf[:1])
+	if err != nil {
+		return "", "", err
+	}
+	if n == 0 {
+		return "", "", io.EOF
+	}
+
+	switch buf[0] {
+	case '\r', '\n':
+		return "enter", "", nil
+	case 3:
+		return "cancel", "", nil
+	case 127, 8:
+		return "backspace", "", nil
+	case 'm', 'M':
+		return "manual", "", nil
+	case 27:
+		_, err = inFile.Read(buf[1:2])
+		if err != nil {
+			return "", "", err
+		}
+		if buf[1] != '[' {
+			return "", "", nil
+		}
+		_, err = inFile.Read(buf[2:3])
+		if err != nil {
+			return "", "", err
+		}
+		switch buf[2] {
+		case 'A':
+			return "up", "", nil
+		case 'B':
+			return "down", "", nil
+		default:
+			return "", "", nil
+		}
+	case 'k', 'K':
+		return "up", "", nil
+	case 'j', 'J':
+		return "down", "", nil
+	default:
+		ch := strings.ToLower(string(buf[0]))
+		if (buf[0] >= 'a' && buf[0] <= 'z') || (buf[0] >= 'A' && buf[0] <= 'Z') || (buf[0] >= '0' && buf[0] <= '9') || buf[0] == '-' {
+			return "text", ch, nil
+		}
+		return "", "", nil
+	}
+}
+
+func enableRawTerminalMode(inFile *os.File) (func(), error) {
+	state, err := sttyGetState(inFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := sttySet(inFile, "raw", "-echo"); err != nil {
+		return nil, err
+	}
+
+	restore := func() {
+		_ = sttySet(inFile, state)
+	}
+	return restore, nil
+}
+
+func sttyGetState(inFile *os.File) (string, error) {
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = inFile
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func sttySet(inFile *os.File, args ...string) error {
+	cmd := exec.Command("stty", args...)
+	cmd.Stdin = inFile
+	return cmd.Run()
 }
