@@ -1,17 +1,20 @@
 # Sol-Cloud ☁️
 
-Deploy a shared Solana test validator to Fly.io in minutes.
+Localnet freedom, globally available.
 
-## Why this exists 🎯
+## Why Sol-Cloud 🎯
 
-`solana-test-validator` is great locally, but teams need one stable endpoint everyone can use.
+Sol-Cloud gives you the flexibility of `solana-test-validator`, but hosted on Fly.io so your team can connect from anywhere.
 
-Sol-Cloud gives you:
+- Configure validator behavior like localnet (clones, limits, program deploys)
+- Share one stable RPC + WebSocket URL with teammates
+- Spin environments up and down with a simple CLI flow
 
-- One setup flow (`init`)
-- One auth flow (`auth fly`)
-- One deploy command (`deploy`)
-- One URL for RPC + WebSocket
+Start in 3 steps:
+
+- `sol-cloud init`
+- `sol-cloud auth fly`
+- `sol-cloud deploy`
 
 ## Install
 
