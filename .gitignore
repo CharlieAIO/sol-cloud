@@ -2,7 +2,8 @@
 bin/
 dist/
 
-# Local config and build artifacts
+# Sol-Cloud local artifacts
+.sol-cloud/
 .sol-cloud.local.yml
 *.log
 
