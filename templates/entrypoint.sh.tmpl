@@ -11,7 +11,9 @@ UPGRADE_AUTHORITY_PATH="{{ .Validator.ProgramDeploy.UpgradeAuthorityPath }}"
 
 supports_flag() {
   local flag="$1"
-  solana-test-validator --help 2>&1 | grep -q -- "$flag"
+  local help_output
+  help_output="$(solana-test-validator --help 2>&1 || true)"
+  grep -q -- "$flag" <<<"$help_output"
 }
 
 wait_for_local_rpc() {

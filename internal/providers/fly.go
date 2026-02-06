@@ -170,7 +170,19 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 	}
 
 	deployOutput, host, err := p.deployViaAPI(ctx, token, cfg, artifactsDir)
+	logPath := filepath.Join(artifactsDir, "deploy.log")
+	if strings.TrimSpace(deployOutput) != "" {
+		if writeErr := os.WriteFile(logPath, []byte(deployOutput), 0o644); writeErr != nil {
+			if err != nil {
+				return nil, fmt.Errorf("%w (also failed to write deploy log: %v)", err, writeErr)
+			}
+			return nil, fmt.Errorf("write deploy log: %w", writeErr)
+		}
+	}
 	if err != nil {
+		if strings.TrimSpace(deployOutput) != "" {
+			return nil, fmt.Errorf("%w\nsee deploy log: %s", err, logPath)
+		}
 		return nil, err
 	}
 	if host == "" {
@@ -178,10 +190,6 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 	}
 	deployment.RPCURL = "https://" + host
 	deployment.WebSocketURL = "wss://" + host
-
-	if err := os.WriteFile(filepath.Join(artifactsDir, "deploy.log"), []byte(deployOutput), 0o644); err != nil {
-		return nil, fmt.Errorf("write deploy log: %w", err)
-	}
 
 	if !cfg.SkipHealthCheck {
 		timeout := cfg.HealthCheckTimeout

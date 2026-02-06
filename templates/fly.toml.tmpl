@@ -25,13 +25,15 @@ primary_region = "{{ .Region }}"
     soft_limit = 1000
 
   [[services.http_checks]]
-    interval = "60s"
-    timeout = "30s"
-    grace_period = "180s"
-    method = "POST"
-    path = "/"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
     protocol = "http"
-    [services.http_checks.headers]
-      Content-Type = "application/json"
-    [services.http_checks.body]
-      raw = '{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
+
+
+[[vm]]
+  memory = '4gb'
+  cpu_kind = 'shared'
+  cpus = 4
