@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
 	"github.com/spf13/cobra"
@@ -105,6 +106,26 @@ var deployCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
+
+		state, err := appconfig.LoadState(projectDir)
+		if err != nil {
+			return fmt.Errorf("load local deployment state: %w", err)
+		}
+		if err := state.UpsertDeployment(appconfig.DeploymentRecord{
+			Name:         deployment.Name,
+			Provider:     deployment.Provider,
+			RPCURL:       deployment.RPCURL,
+			WebSocketURL: deployment.WebSocketURL,
+			Region:       region,
+			ArtifactsDir: deployment.ArtifactsDir,
+		}); err != nil {
+			return fmt.Errorf("update local deployment state: %w", err)
+		}
+		if err := appconfig.SaveState(projectDir, state); err != nil {
+			return fmt.Errorf("save local deployment state: %w", err)
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "state file:   %s\n", appconfig.StateFilePath(projectDir))
 		fmt.Fprintf(cmd.OutOrStdout(), "tip:          solana config set --url %s\n", deployment.RPCURL)
 		return nil
 	},
