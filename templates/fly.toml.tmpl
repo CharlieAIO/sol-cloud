@@ -1,0 +1,37 @@
+app = "{{ .Name }}"
+primary_region = "{{ .Region }}"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 1000
+
+  [[services.http_checks]]
+    interval = "60s"
+    timeout = "30s"
+    grace_period = "180s"
+    method = "POST"
+    path = "/"
+    protocol = "http"
+    [services.http_checks.headers]
+      Content-Type = "application/json"
+    [services.http_checks.body]
+      raw = '{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
