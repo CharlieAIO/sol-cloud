@@ -20,6 +20,9 @@ var rootCmd = &cobra.Command{
 	Long:         "sol-cloud deploys and manages Solana validator environments on Fly.io.",
 	Version:      version,
 	SilenceUsage: true,
+	CompletionOptions: cobra.CompletionOptions{
+		DisableDefaultCmd: true,
+	},
 }
 
 func Execute() error {
