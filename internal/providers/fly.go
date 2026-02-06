@@ -16,10 +16,10 @@ import (
 	"time"
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
+	tmplassets "github.com/CharlieAIO/sol-cloud/templates"
 )
 
 const (
-	defaultTemplateDir    = "templates"
 	defaultHealthCheck    = 3 * time.Minute
 	defaultPollInterval   = 5 * time.Second
 	defaultFlyMachinesAPI = "https://api.machines.dev/v1"
@@ -33,7 +33,6 @@ var rpcHealthCheckFn = checkRPCHealth
 
 // FlyProvider manages validator deployments on Fly.io.
 type FlyProvider struct {
-	TemplateDir        string
 	AccessToken        string
 	HTTPClient         *http.Client
 	MachinesAPIBaseURL string
@@ -42,7 +41,6 @@ type FlyProvider struct {
 
 func NewFlyProvider() *FlyProvider {
 	return &FlyProvider{
-		TemplateDir:        defaultTemplateDir,
 		MachinesAPIBaseURL: defaultFlyMachinesAPI,
 		GraphQLURL:         defaultFlyGraphQLURL,
 	}
@@ -90,11 +88,6 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		}
 		projectDir = wd
 	}
-	templateDir := p.templateDir()
-	if !filepath.IsAbs(templateDir) {
-		templateDir = filepath.Join(projectDir, templateDir)
-	}
-
 	artifactsDir := filepath.Join(projectDir, ".sol-cloud", "deployments", cfg.Name)
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create artifacts directory: %w", err)
@@ -123,33 +116,19 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		},
 	}
 
-	if err := renderTemplateFile(
-		filepath.Join(templateDir, "Dockerfile.tmpl"),
-		filepath.Join(artifactsDir, "Dockerfile"),
-		data,
-	); err != nil {
-		return nil, err
+	templateTargets := []struct {
+		Name string
+		Dst  string
+	}{
+		{Name: "Dockerfile.tmpl", Dst: filepath.Join(artifactsDir, "Dockerfile")},
+		{Name: "fly.toml.tmpl", Dst: filepath.Join(artifactsDir, "fly.toml")},
+		{Name: "nginx.conf.tmpl", Dst: filepath.Join(artifactsDir, "nginx.conf")},
+		{Name: "entrypoint.sh.tmpl", Dst: filepath.Join(artifactsDir, "entrypoint.sh")},
 	}
-	if err := renderTemplateFile(
-		filepath.Join(templateDir, "fly.toml.tmpl"),
-		filepath.Join(artifactsDir, "fly.toml"),
-		data,
-	); err != nil {
-		return nil, err
-	}
-	if err := renderTemplateFile(
-		filepath.Join(templateDir, "nginx.conf.tmpl"),
-		filepath.Join(artifactsDir, "nginx.conf"),
-		data,
-	); err != nil {
-		return nil, err
-	}
-	if err := renderTemplateFile(
-		filepath.Join(templateDir, "entrypoint.sh.tmpl"),
-		filepath.Join(artifactsDir, "entrypoint.sh"),
-		data,
-	); err != nil {
-		return nil, err
+	for _, target := range templateTargets {
+		if err := renderEmbeddedTemplateFile(target.Name, target.Dst, data); err != nil {
+			return nil, err
+		}
 	}
 
 	deployment := &Deployment{
@@ -234,13 +213,6 @@ func (p *FlyProvider) Status(ctx context.Context, name string) (*Status, error) 
 	}
 
 	return p.statusViaAPI(ctx, token, name)
-}
-
-func (p *FlyProvider) templateDir() string {
-	if p.TemplateDir != "" {
-		return p.TemplateDir
-	}
-	return defaultTemplateDir
 }
 
 // VerifyAccessToken validates a Fly access token against the Machines API.
@@ -645,10 +617,16 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-func renderTemplateFile(src, dst string, data any) error {
-	tpl, err := template.ParseFiles(src)
+func renderEmbeddedTemplateFile(name, dst string, data any) error {
+	templateName := filepath.ToSlash(name)
+	content, err := tmplassets.ReadFile(templateName)
 	if err != nil {
-		return fmt.Errorf("parse template %s: %w", src, err)
+		return fmt.Errorf("read embedded template %s: %w", templateName, err)
+	}
+
+	tpl, err := template.New(name).Parse(string(content))
+	if err != nil {
+		return fmt.Errorf("parse embedded template %s: %w", templateName, err)
 	}
 
 	out, err := os.Create(dst)
@@ -658,7 +636,7 @@ func renderTemplateFile(src, dst string, data any) error {
 	defer out.Close()
 
 	if err := tpl.Execute(out, data); err != nil {
-		return fmt.Errorf("render template %s: %w", src, err)
+		return fmt.Errorf("render embedded template %s: %w", templateName, err)
 	}
 	return nil
 }
