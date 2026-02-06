@@ -5,17 +5,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 var cfgFile string
+var version = "dev"
 
 var rootCmd = &cobra.Command{
-	Use:   "sol-cloud",
-	Short: "Deploy Solana validators to cloud providers",
-	Long:  "sol-cloud deploys and manages Solana validators on cloud providers like Fly.io.",
+	Use:          "sol-cloud",
+	Short:        "Deploy Solana validators to Fly.io",
+	Long:         "sol-cloud deploys and manages Solana validator environments on Fly.io.",
+	Version:      version,
+	SilenceUsage: true,
 }
 
 func Execute() error {
@@ -43,6 +47,7 @@ func initConfig() {
 	}
 
 	viper.SetEnvPrefix("SOL_CLOUD")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {

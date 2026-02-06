@@ -22,6 +22,10 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create a starter config file",
 	Long:  "Create a .sol-cloud.yml starter file in the current directory.",
+	Example: `  sol-cloud init
+  sol-cloud init --app-name my-validator --region ord
+  sol-cloud init --slots-per-epoch 216000 --clock-multiplier 2 --compute-unit-limit 300000
+  sol-cloud init --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		const file = ".sol-cloud.yml"
 		if _, err := os.Stat(file); err == nil && !initForce {

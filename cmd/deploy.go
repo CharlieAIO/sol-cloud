@@ -30,6 +30,10 @@ var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a validator to Fly.io",
 	Long:  "Render deployment artifacts and deploy a Solana validator to Fly.io.",
+	Example: `  sol-cloud deploy --name my-validator
+  sol-cloud deploy --dry-run --name my-validator
+  sol-cloud deploy --name my-validator --region ord --health-timeout 4m
+  sol-cloud deploy --name my-validator --slots-per-epoch 216000 --clock-multiplier 2 --compute-unit-limit 300000`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		providerName := strings.ToLower(strings.TrimSpace(viper.GetString("provider")))
 		if providerName == "" {

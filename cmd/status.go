@@ -26,7 +26,10 @@ var statusCmd = &cobra.Command{
 	Use:   "status [name]",
 	Short: "Get validator status",
 	Long:  "Show status and health details for a deployed validator.",
-	Args:  cobra.MaximumNArgs(1),
+	Example: `  sol-cloud status
+  sol-cloud status --name my-validator
+  sol-cloud status my-validator --timeout 30s`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := strings.TrimSpace(statusName)
 		if name == "" && len(args) > 0 {
