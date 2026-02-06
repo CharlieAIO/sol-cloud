@@ -140,7 +140,7 @@ var deployCmd = &cobra.Command{
 
 		flyProvider := providers.NewFlyProvider()
 		if !deployDryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "deploying validator to Fly.io...")
+			fmt.Fprintln(cmd.OutOrStdout(), "🚀 Deploying validator to Fly.io...")
 		}
 		deployment, err := flyProvider.Deploy(cmd.Context(), cfg)
 		if err != nil {
@@ -171,12 +171,15 @@ var deployCmd = &cobra.Command{
 			return nil
 		}
 
-		fmt.Fprintln(cmd.OutOrStdout(), "validator deployed")
-		fmt.Fprintf(cmd.OutOrStdout(), "app:          %s\n", deployment.Name)
-		fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
-		fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
+		fmt.Fprintln(cmd.OutOrStdout(), "✅ Validator deployed!")
+		fmt.Fprintln(cmd.OutOrStdout(), "🎉 Your Solana RPC + WebSocket endpoints are ready to use:")
+		fmt.Fprintf(cmd.OutOrStdout(), "📡 Solana RPC: %s\n", deployment.RPCURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "🔌 Solana WS:  %s\n", deployment.WebSocketURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "🌐 Fly app:    https://fly.io/apps/%s\n", deployment.Name)
+		fmt.Fprintf(cmd.OutOrStdout(), "📊 Monitor:    https://fly.io/apps/%s/monitoring\n", deployment.Name)
+		fmt.Fprintf(cmd.OutOrStdout(), "🧩 App:        %s\n", deployment.Name)
+		fmt.Fprintf(cmd.OutOrStdout(), "📁 Artifacts:  %s\n", deployment.ArtifactsDir)
+		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
 			validatorCfg.SlotsPerEpoch,
 			validatorCfg.TicksPerSlot,
 			validatorCfg.ComputeUnitLimit,
@@ -210,8 +213,8 @@ var deployCmd = &cobra.Command{
 			return fmt.Errorf("save local deployment state: %w", err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "state file:   %s\n", appconfig.StateFilePath(projectDir))
-		fmt.Fprintf(cmd.OutOrStdout(), "tip:          solana config set --url %s\n", deployment.RPCURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "🗂️ State file: %s\n", appconfig.StateFilePath(projectDir))
+		fmt.Fprintf(cmd.OutOrStdout(), "💡 Tip:        solana config set --url %s\n", deployment.RPCURL)
 		return nil
 	},
 }
