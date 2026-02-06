@@ -21,6 +21,9 @@ var (
 	deploySkipHealthCheck    bool
 	deployHealthCheckTimeout time.Duration
 	deployHealthCheckPoll    time.Duration
+	deploySlotsPerEpoch      uint64
+	deployClockMultiplier    uint64
+	deployComputeUnitLimit   uint64
 )
 
 var deployCmd = &cobra.Command{
@@ -62,14 +65,18 @@ var deployCmd = &cobra.Command{
 			ClockMultiplier:  viper.GetUint64("validator.clock_multiplier"),
 			ComputeUnitLimit: viper.GetUint64("validator.compute_unit_limit"),
 		}
-		if validatorCfg.SlotsPerEpoch == 0 {
-			validatorCfg.SlotsPerEpoch = 432000
+		validatorCfg.ApplyDefaults()
+		if deploySlotsPerEpoch > 0 {
+			validatorCfg.SlotsPerEpoch = deploySlotsPerEpoch
 		}
-		if validatorCfg.ClockMultiplier == 0 {
-			validatorCfg.ClockMultiplier = 1
+		if deployClockMultiplier > 0 {
+			validatorCfg.ClockMultiplier = deployClockMultiplier
 		}
-		if validatorCfg.ComputeUnitLimit == 0 {
-			validatorCfg.ComputeUnitLimit = 200000
+		if deployComputeUnitLimit > 0 {
+			validatorCfg.ComputeUnitLimit = deployComputeUnitLimit
+		}
+		if err := validatorCfg.Validate(); err != nil {
+			return fmt.Errorf("invalid validator config: %w", err)
 		}
 
 		cfg := &providers.Config{
@@ -98,6 +105,8 @@ var deployCmd = &cobra.Command{
 			fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
+			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d clock_multiplier=%d compute_unit_limit=%d\n",
+				validatorCfg.SlotsPerEpoch, validatorCfg.ClockMultiplier, validatorCfg.ComputeUnitLimit)
 			return nil
 		}
 
@@ -106,6 +115,8 @@ var deployCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
+		fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d clock_multiplier=%d compute_unit_limit=%d\n",
+			validatorCfg.SlotsPerEpoch, validatorCfg.ClockMultiplier, validatorCfg.ComputeUnitLimit)
 
 		state, err := appconfig.LoadState(projectDir)
 		if err != nil {
@@ -140,4 +151,7 @@ func init() {
 	deployCmd.Flags().BoolVar(&deploySkipHealthCheck, "skip-health-check", false, "skip post-deploy RPC health validation")
 	deployCmd.Flags().DurationVar(&deployHealthCheckTimeout, "health-timeout", 3*time.Minute, "maximum wait for RPC health")
 	deployCmd.Flags().DurationVar(&deployHealthCheckPoll, "health-interval", 5*time.Second, "poll interval for RPC health checks")
+	deployCmd.Flags().Uint64Var(&deploySlotsPerEpoch, "slots-per-epoch", 0, "override validator.slots_per_epoch")
+	deployCmd.Flags().Uint64Var(&deployClockMultiplier, "clock-multiplier", 0, "override validator.clock_multiplier")
+	deployCmd.Flags().Uint64Var(&deployComputeUnitLimit, "compute-unit-limit", 0, "override validator.compute_unit_limit")
 }
