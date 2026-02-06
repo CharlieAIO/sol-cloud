@@ -1,0 +1,12 @@
+# Binaries
+bin/
+dist/
+
+# Local config and build artifacts
+.sol-cloud.local.yml
+*.log
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
