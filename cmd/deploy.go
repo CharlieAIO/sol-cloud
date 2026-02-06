@@ -16,6 +16,7 @@ import (
 
 var (
 	deployRegion             string
+	deployOrg                string
 	deployDryRun             bool
 	deploySkipHealthCheck    bool
 	deployHealthCheckTimeout time.Duration
@@ -127,6 +128,7 @@ var deployCmd = &cobra.Command{
 
 		cfg := &providers.Config{
 			Name:                name,
+			OrgSlug:             firstNonEmpty(strings.TrimSpace(deployOrg), strings.TrimSpace(viper.GetString("org"))),
 			Region:              region,
 			ProjectDir:          projectDir,
 			Validator:           validatorCfg,
@@ -218,7 +220,8 @@ func init() {
 	rootCmd.AddCommand(deployCmd)
 
 	deployCmd.Flags().StringVar(&deployRegion, "region", "", "Fly region (overrides region in config)")
-	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "render files but skip flyctl deployment")
+	deployCmd.Flags().StringVar(&deployOrg, "org", "", "Fly org slug (overrides org in config/credentials)")
+	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "render files but skip API deployment")
 	deployCmd.Flags().BoolVar(&deploySkipHealthCheck, "skip-health-check", false, "skip post-deploy RPC health validation")
 	deployCmd.Flags().DurationVar(&deployHealthCheckTimeout, "health-timeout", 3*time.Minute, "maximum wait for RPC health")
 	deployCmd.Flags().DurationVar(&deployHealthCheckPoll, "health-interval", 5*time.Second, "poll interval for RPC health checks")
@@ -233,4 +236,13 @@ func init() {
 	deployCmd.Flags().StringVar(&deployProgramIDLegacy, "program-id", "", "deprecated alias for --program-id-keypair")
 	_ = deployCmd.Flags().MarkDeprecated("program-id", "use --program-id-keypair with a keypair path")
 	deployCmd.Flags().StringVar(&deployUpgradeAuthority, "upgrade-authority", "", "path to upgrade authority keypair (overrides validator.program_deploy.upgrade_authority)")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

@@ -9,19 +9,23 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
 	"time"
+
+	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 )
 
 const (
-	defaultTemplateDir  = "templates"
-	defaultFlyctlBin    = "flyctl"
-	defaultHealthCheck  = 3 * time.Minute
-	defaultPollInterval = 5 * time.Second
+	defaultTemplateDir    = "templates"
+	defaultHealthCheck    = 3 * time.Minute
+	defaultPollInterval   = 5 * time.Second
+	defaultFlyMachinesAPI = "https://api.machines.dev/v1"
+	defaultFlyGraphQLURL  = "https://api.fly.io/graphql"
+	defaultHTTPTimeout    = 30 * time.Second
+	flyAuthProbeAppName   = "sol-cloud-auth-probe"
 )
 
 var flyDomainPattern = regexp.MustCompile(`([a-zA-Z0-9-]+\.fly\.dev)`)
@@ -29,14 +33,18 @@ var rpcHealthCheckFn = checkRPCHealth
 
 // FlyProvider manages validator deployments on Fly.io.
 type FlyProvider struct {
-	TemplateDir string
-	FlyctlBin   string
+	TemplateDir        string
+	AccessToken        string
+	HTTPClient         *http.Client
+	MachinesAPIBaseURL string
+	GraphQLURL         string
 }
 
 func NewFlyProvider() *FlyProvider {
 	return &FlyProvider{
-		TemplateDir: defaultTemplateDir,
-		FlyctlBin:   defaultFlyctlBin,
+		TemplateDir:        defaultTemplateDir,
+		MachinesAPIBaseURL: defaultFlyMachinesAPI,
+		GraphQLURL:         defaultFlyGraphQLURL,
 	}
 }
 
@@ -156,31 +164,22 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		return deployment, nil
 	}
 
-	if _, err := exec.LookPath(p.flyctlBin()); err != nil {
-		return nil, fmt.Errorf("flyctl not found in PATH: %w (install from https://fly.io/docs/flyctl/install/)", err)
+	token, err := p.resolveAccessToken()
+	if err != nil {
+		return nil, fmt.Errorf("fly auth required: run `sol-cloud auth fly`: %w", err)
 	}
 
-	createOutput, createErr := p.runFlyctl(ctx, projectDir, "apps", "create", cfg.Name)
-	if createErr != nil {
-		lower := strings.ToLower(createOutput)
-		if !strings.Contains(lower, "already exists") && !strings.Contains(lower, "name is already taken") {
-			return nil, fmt.Errorf("create fly app: %w\n%s", createErr, strings.TrimSpace(createOutput))
-		}
+	deployOutput, host, err := p.deployViaAPI(ctx, token, cfg, artifactsDir)
+	if err != nil {
+		return nil, err
 	}
-
-	deployOutput, deployErr := p.runFlyctl(ctx, artifactsDir, "deploy", "--app", cfg.Name, "--config", "fly.toml", "--remote-only", "--yes")
-	if deployErr != nil {
-		return nil, fmt.Errorf("deploy fly app: %w\n%s", deployErr, strings.TrimSpace(deployOutput))
-	}
-
-	host := extractFlyHost(deployOutput)
 	if host == "" {
 		host = fmt.Sprintf("%s.fly.dev", cfg.Name)
 	}
 	deployment.RPCURL = "https://" + host
 	deployment.WebSocketURL = "wss://" + host
 
-	if err := os.WriteFile(filepath.Join(artifactsDir, "flyctl-deploy.log"), []byte(deployOutput), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(artifactsDir, "deploy.log"), []byte(deployOutput), 0o644); err != nil {
 		return nil, fmt.Errorf("write deploy log: %w", err)
 	}
 
@@ -205,13 +204,13 @@ func (p *FlyProvider) Destroy(ctx context.Context, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("deployment name is required")
 	}
-	if _, err := exec.LookPath(p.flyctlBin()); err != nil {
-		return fmt.Errorf("flyctl not found in PATH: %w", err)
-	}
 
-	output, err := p.runFlyctl(ctx, "", "apps", "destroy", name, "--yes")
+	token, err := p.resolveAccessToken()
 	if err != nil {
-		return fmt.Errorf("destroy fly app: %w\n%s", err, strings.TrimSpace(output))
+		return fmt.Errorf("fly auth required: run `sol-cloud auth fly`: %w", err)
+	}
+	if err := p.destroyAppViaAPI(ctx, token, name); err != nil {
+		return fmt.Errorf("destroy fly app via API: %w", err)
 	}
 	return nil
 }
@@ -220,31 +219,13 @@ func (p *FlyProvider) Status(ctx context.Context, name string) (*Status, error) 
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("deployment name is required")
 	}
-	if _, err := exec.LookPath(p.flyctlBin()); err != nil {
-		return nil, fmt.Errorf("flyctl not found in PATH: %w", err)
-	}
 
-	output, err := p.runFlyctl(ctx, "", "status", "--app", name)
+	token, err := p.resolveAccessToken()
 	if err != nil {
-		return nil, fmt.Errorf("fetch fly status: %w\n%s", err, strings.TrimSpace(output))
+		return nil, fmt.Errorf("fly auth required: run `sol-cloud auth fly`: %w", err)
 	}
 
-	state := "unknown"
-	lower := strings.ToLower(output)
-	if strings.Contains(lower, "running") {
-		state = "running"
-	}
-
-	return &Status{Name: name, State: state}, nil
-}
-
-func (p *FlyProvider) runFlyctl(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, p.flyctlBin(), args...)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	return p.statusViaAPI(ctx, token, name)
 }
 
 func (p *FlyProvider) templateDir() string {
@@ -254,11 +235,309 @@ func (p *FlyProvider) templateDir() string {
 	return defaultTemplateDir
 }
 
-func (p *FlyProvider) flyctlBin() string {
-	if p.FlyctlBin != "" {
-		return p.FlyctlBin
+// VerifyAccessToken validates a Fly access token against the Machines API.
+func (p *FlyProvider) VerifyAccessToken(ctx context.Context, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("fly access token is required")
 	}
-	return defaultFlyctlBin
+
+	err := p.verifyAccessTokenMachinesProbe(ctx, token)
+	if err == nil {
+		return nil
+	}
+
+	var statusErr *flyAPIStatusError
+	if errors.As(err, &statusErr) {
+		switch statusErr.StatusCode {
+		case http.StatusUnauthorized:
+			return fmt.Errorf("token rejected by Fly API (%d): %s", statusErr.StatusCode, strings.TrimSpace(statusErr.Body))
+		case http.StatusForbidden:
+			// Could be a valid token with narrower scope; try GraphQL auth check.
+			if fallbackErr := p.verifyAccessTokenGraphQL(ctx, token); fallbackErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("token verification failed: machines API returned 403 and graphql fallback failed: %w", fallbackErr)
+			}
+		case http.StatusNotFound:
+			// /apps/<probe>/machines returns 404 for missing app when auth is accepted.
+			if !looksLikeRouteNotFound(statusErr.Body) {
+				return nil
+			}
+
+			if fallbackErr := p.verifyAccessTokenGraphQL(ctx, token); fallbackErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("token verification failed: machines endpoint returned route 404 and graphql fallback failed: %w", fallbackErr)
+			}
+		default:
+			if fallbackErr := p.verifyAccessTokenGraphQL(ctx, token); fallbackErr == nil {
+				return nil
+			}
+			return fmt.Errorf("token verification failed: %w", err)
+		}
+	}
+	return fmt.Errorf("token verification failed: %w", err)
+}
+
+type flyAPIStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *flyAPIStatusError) Error() string {
+	if e == nil {
+		return "fly api error"
+	}
+	return fmt.Sprintf("fly api returned %d: %s", e.StatusCode, strings.TrimSpace(e.Body))
+}
+
+func (p *FlyProvider) verifyAccessTokenMachinesProbe(ctx context.Context, token string) error {
+	url := p.machinesAPIURL("/apps/" + flyAuthProbeAppName + "/machines")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build machines auth probe request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := p.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("machines auth probe failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return &flyAPIStatusError{
+		StatusCode: resp.StatusCode,
+		Body:       string(body),
+	}
+}
+
+func (p *FlyProvider) verifyAccessTokenGraphQL(ctx context.Context, token string) error {
+	reqBody, err := json.Marshal(map[string]string{
+		"query": "query { viewer { id } apps { nodes { id } } }",
+	})
+	if err != nil {
+		return fmt.Errorf("build graphql token check payload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.graphqlURL(), bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("build graphql token check request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("graphql token check failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("token rejected by Fly GraphQL API (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected Fly GraphQL response (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var decoded struct {
+		Data   map[string]json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return fmt.Errorf("decode graphql token check response: %w", err)
+	}
+	if len(decoded.Errors) > 0 {
+		return fmt.Errorf("graphql token check error: %s", strings.TrimSpace(decoded.Errors[0].Message))
+	}
+	if len(decoded.Data) == 0 {
+		return errors.New("graphql token check returned empty data")
+	}
+	return nil
+}
+
+func (p *FlyProvider) resolveAccessToken() (string, error) {
+	if token := strings.TrimSpace(p.AccessToken); token != "" {
+		return token, nil
+	}
+	if token := strings.TrimSpace(os.Getenv("SOL_CLOUD_FLY_ACCESS_TOKEN")); token != "" {
+		return token, nil
+	}
+	if token := strings.TrimSpace(os.Getenv("FLY_ACCESS_TOKEN")); token != "" {
+		return token, nil
+	}
+	if token := strings.TrimSpace(os.Getenv("FLY_API_TOKEN")); token != "" {
+		return token, nil
+	}
+
+	creds, err := appconfig.LoadCredentials()
+	if err != nil {
+		return "", fmt.Errorf("load credentials: %w", err)
+	}
+	if token := strings.TrimSpace(creds.Fly.AccessToken); token != "" {
+		return token, nil
+	}
+	return "", errors.New("no fly access token configured")
+}
+
+func (p *FlyProvider) statusViaAPI(ctx context.Context, token, name string) (*Status, error) {
+	states, err := p.fetchMachineStates(ctx, token, name)
+	if err != nil {
+		return nil, err
+	}
+
+	state := "unknown"
+	if len(states) == 0 {
+		state = "stopped"
+	}
+	for _, machineState := range states {
+		switch machineState {
+		case "started", "running":
+			return &Status{Name: name, State: "running"}, nil
+		case "starting", "created":
+			state = "starting"
+		case "stopped", "destroyed":
+			if state == "unknown" {
+				state = "stopped"
+			}
+		}
+	}
+
+	return &Status{Name: name, State: state}, nil
+}
+
+func (p *FlyProvider) destroyAppViaAPI(ctx context.Context, token, name string) error {
+	status, body, err := p.doMachinesRequest(ctx, token, http.MethodDelete, "/apps/"+name, nil)
+	if err != nil {
+		return err
+	}
+	if status >= 200 && status < 300 {
+		return nil
+	}
+	if status == http.StatusNotFound {
+		return fmt.Errorf("app %q not found", name)
+	}
+	if status == http.StatusBadRequest || status == http.StatusConflict {
+		machines, listErr := p.listMachines(ctx, token, name)
+		if listErr == nil {
+			for _, machine := range machines {
+				if strings.TrimSpace(machine.ID) == "" {
+					continue
+				}
+				_ = p.deleteMachine(ctx, token, name, machine.ID)
+			}
+			retryStatus, retryBody, retryErr := p.doMachinesRequest(ctx, token, http.MethodDelete, "/apps/"+name, nil)
+			if retryErr == nil && retryStatus >= 200 && retryStatus < 300 {
+				return nil
+			}
+			if retryErr != nil {
+				return fmt.Errorf("destroy app retry failed: %w", retryErr)
+			}
+			return fmt.Errorf("destroy request returned status %d: %s", retryStatus, strings.TrimSpace(string(retryBody)))
+		}
+	}
+	return fmt.Errorf("destroy request returned status %d: %s", status, strings.TrimSpace(string(body)))
+}
+
+func (p *FlyProvider) fetchMachineStates(ctx context.Context, token, name string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.machinesAPIURL("/apps/"+name+"/machines"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := p.httpClient().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("status request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("read status response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("app %q not found", name)
+		}
+		return nil, fmt.Errorf("status request returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	states := collectMachineStates(body)
+	return states, nil
+}
+
+type flyMachineStatus struct {
+	State  string `json:"state"`
+	Status string `json:"status"`
+}
+
+func collectMachineStates(payload []byte) []string {
+	var machines []flyMachineStatus
+	if err := json.Unmarshal(payload, &machines); err == nil {
+		return compactStatesFromMachines(machines)
+	}
+
+	var wrapped struct {
+		Machines []flyMachineStatus `json:"machines"`
+	}
+	if err := json.Unmarshal(payload, &wrapped); err == nil {
+		return compactStatesFromMachines(wrapped.Machines)
+	}
+
+	return nil
+}
+
+func compactStatesFromMachines(machines []flyMachineStatus) []string {
+	states := make([]string, 0, len(machines))
+	for _, machine := range machines {
+		state := strings.ToLower(strings.TrimSpace(machine.State))
+		if state == "" {
+			state = strings.ToLower(strings.TrimSpace(machine.Status))
+		}
+		if state == "" {
+			continue
+		}
+		states = append(states, state)
+	}
+	return states
+}
+
+func (p *FlyProvider) machinesAPIURL(path string) string {
+	base := strings.TrimRight(strings.TrimSpace(p.MachinesAPIBaseURL), "/")
+	if base == "" {
+		base = defaultFlyMachinesAPI
+	}
+	if strings.HasPrefix(path, "/") {
+		return base + path
+	}
+	return base + "/" + path
+}
+
+func (p *FlyProvider) graphqlURL() string {
+	if strings.TrimSpace(p.GraphQLURL) != "" {
+		return strings.TrimSpace(p.GraphQLURL)
+	}
+	return defaultFlyGraphQLURL
+}
+
+func looksLikeRouteNotFound(body string) bool {
+	lower := strings.ToLower(strings.TrimSpace(body))
+	return strings.Contains(lower, "404 page not found") || lower == "not found"
+}
+
+func (p *FlyProvider) httpClient() *http.Client {
+	if p.HTTPClient != nil {
+		return p.HTTPClient
+	}
+	return &http.Client{Timeout: defaultHTTPTimeout}
 }
 
 func prepareProgramDeployData(projectDir, programDir string, cfg *Config) (flyProgramDeployTemplateData, error) {

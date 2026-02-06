@@ -6,6 +6,7 @@ import "github.com/CharlieAIO/sol-cloud/internal/validator"
 type AppConfig struct {
 	Provider  string           `mapstructure:"provider" yaml:"provider"`
 	AppName   string           `mapstructure:"app_name" yaml:"app_name"`
+	Org       string           `mapstructure:"org" yaml:"org"`
 	Region    string           `mapstructure:"region" yaml:"region"`
 	Validator validator.Config `mapstructure:"validator" yaml:"validator"`
 }

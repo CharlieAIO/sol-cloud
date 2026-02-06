@@ -10,6 +10,7 @@ import (
 // Config captures provider-agnostic deployment inputs.
 type Config struct {
 	Name                string
+	OrgSlug             string
 	Region              string
 	ProjectDir          string
 	Validator           validator.Config
