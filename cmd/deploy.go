@@ -27,6 +27,10 @@ var (
 	deployLedgerLimitSize    uint64
 	deployCloneAccounts      []string
 	deployCloneUpPrograms    []string
+	deployProgramSOPath      string
+	deployProgramIDKeypair   string
+	deployProgramIDLegacy    string
+	deployUpgradeAuthority   string
 )
 
 var deployCmd = &cobra.Command{
@@ -37,7 +41,8 @@ var deployCmd = &cobra.Command{
   sol-cloud deploy --dry-run --name my-validator
   sol-cloud deploy --name my-validator --region ord --health-timeout 4m
   sol-cloud deploy --name my-validator --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000
-  sol-cloud deploy --name my-validator --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`,
+  sol-cloud deploy --name my-validator --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
+  sol-cloud deploy --name my-validator --program-so ./programs/my_program.so --program-id-keypair ./keys/program-keypair.json --upgrade-authority ./keys/upgrade-authority.json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		providerName := strings.ToLower(strings.TrimSpace(viper.GetString("provider")))
 		if providerName == "" {
@@ -75,6 +80,15 @@ var deployCmd = &cobra.Command{
 			LedgerLimitSize:          viper.GetUint64("validator.ledger_limit_size"),
 			CloneAccounts:            viper.GetStringSlice("validator.clone_accounts"),
 			CloneUpgradeablePrograms: viper.GetStringSlice("validator.clone_upgradeable_programs"),
+			ProgramDeploy: validator.ProgramDeployConfig{
+				SOPath:               viper.GetString("validator.program_deploy.so_path"),
+				ProgramIDKeypairPath: viper.GetString("validator.program_deploy.program_id_keypair"),
+				UpgradeAuthorityPath: viper.GetString("validator.program_deploy.upgrade_authority"),
+			},
+		}
+		// Backward compatibility for older configs that used program_id pubkey semantics.
+		if strings.TrimSpace(validatorCfg.ProgramDeploy.ProgramIDKeypairPath) == "" {
+			validatorCfg.ProgramDeploy.ProgramIDKeypairPath = viper.GetString("validator.program_deploy.program_id")
 		}
 		validatorCfg.ApplyDefaults()
 		if deploySlotsPerEpoch > 0 {
@@ -94,6 +108,18 @@ var deployCmd = &cobra.Command{
 		}
 		if cmd.Flags().Changed("clone-upgradeable-program") {
 			validatorCfg.CloneUpgradeablePrograms = append([]string(nil), deployCloneUpPrograms...)
+		}
+		if cmd.Flags().Changed("program-so") {
+			validatorCfg.ProgramDeploy.SOPath = deployProgramSOPath
+		}
+		if cmd.Flags().Changed("program-id-keypair") {
+			validatorCfg.ProgramDeploy.ProgramIDKeypairPath = deployProgramIDKeypair
+		}
+		if cmd.Flags().Changed("program-id") {
+			validatorCfg.ProgramDeploy.ProgramIDKeypairPath = deployProgramIDLegacy
+		}
+		if cmd.Flags().Changed("upgrade-authority") {
+			validatorCfg.ProgramDeploy.UpgradeAuthorityPath = deployUpgradeAuthority
 		}
 		if err := validatorCfg.Validate(); err != nil {
 			return fmt.Errorf("invalid validator config: %w", err)
@@ -133,6 +159,13 @@ var deployCmd = &cobra.Command{
 				len(validatorCfg.CloneAccounts),
 				len(validatorCfg.CloneUpgradeablePrograms),
 			)
+			if validatorCfg.ProgramDeploy.Enabled() {
+				fmt.Fprintf(cmd.OutOrStdout(), "program:      so=%s program_id_keypair=%s upgrade_authority=%s\n",
+					validatorCfg.ProgramDeploy.SOPath,
+					validatorCfg.ProgramDeploy.ProgramIDKeypairPath,
+					validatorCfg.ProgramDeploy.UpgradeAuthorityPath,
+				)
+			}
 			return nil
 		}
 
@@ -149,6 +182,13 @@ var deployCmd = &cobra.Command{
 			len(validatorCfg.CloneAccounts),
 			len(validatorCfg.CloneUpgradeablePrograms),
 		)
+		if validatorCfg.ProgramDeploy.Enabled() {
+			fmt.Fprintf(cmd.OutOrStdout(), "program:      so=%s program_id_keypair=%s upgrade_authority=%s\n",
+				validatorCfg.ProgramDeploy.SOPath,
+				validatorCfg.ProgramDeploy.ProgramIDKeypairPath,
+				validatorCfg.ProgramDeploy.UpgradeAuthorityPath,
+			)
+		}
 
 		state, err := appconfig.LoadState(projectDir)
 		if err != nil {
@@ -189,4 +229,9 @@ func init() {
 	deployCmd.Flags().Uint64Var(&deployLedgerLimitSize, "ledger-limit-size", 0, "override validator.ledger_limit_size")
 	deployCmd.Flags().StringSliceVar(&deployCloneAccounts, "clone", nil, "repeatable account pubkey(s) to pass as --clone to solana-test-validator")
 	deployCmd.Flags().StringSliceVar(&deployCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to pass as --clone-upgradeable-program")
+	deployCmd.Flags().StringVar(&deployProgramSOPath, "program-so", "", "path to .so file to deploy on validator startup (overrides validator.program_deploy.so_path)")
+	deployCmd.Flags().StringVar(&deployProgramIDKeypair, "program-id-keypair", "", "path to program id keypair used with --program-id during startup deploy (overrides validator.program_deploy.program_id_keypair)")
+	deployCmd.Flags().StringVar(&deployProgramIDLegacy, "program-id", "", "deprecated alias for --program-id-keypair")
+	_ = deployCmd.Flags().MarkDeprecated("program-id", "use --program-id-keypair with a keypair path")
+	deployCmd.Flags().StringVar(&deployUpgradeAuthority, "upgrade-authority", "", "path to upgrade authority keypair (overrides validator.program_deploy.upgrade_authority)")
 }

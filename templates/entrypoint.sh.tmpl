@@ -5,10 +5,75 @@ SLOTS_PER_EPOCH="{{ .Validator.SlotsPerEpoch }}"
 TICKS_PER_SLOT="{{ .Validator.TicksPerSlot }}"
 COMPUTE_UNIT_LIMIT="{{ .Validator.ComputeUnitLimit }}"
 LEDGER_LIMIT_SIZE="{{ .Validator.LedgerLimitSize }}"
+PROGRAM_SO_PATH="{{ .Validator.ProgramDeploy.SOPath }}"
+PROGRAM_ID_KEYPAIR_PATH="{{ .Validator.ProgramDeploy.ProgramIDKeypairPath }}"
+UPGRADE_AUTHORITY_PATH="{{ .Validator.ProgramDeploy.UpgradeAuthorityPath }}"
 
 supports_flag() {
   local flag="$1"
   solana-test-validator --help 2>&1 | grep -q -- "$flag"
+}
+
+wait_for_local_rpc() {
+  local endpoint="http://127.0.0.1:8899"
+  local payload='{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
+
+  for _ in $(seq 1 90); do
+    if ! kill -0 "$validator_pid" 2>/dev/null; then
+      echo "validator exited before RPC became healthy" >&2
+      return 1
+    fi
+    if curl -sS -m 2 -H "Content-Type: application/json" -d "$payload" "$endpoint" | grep -q '"result":"ok"'; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "validator RPC did not become healthy in time for startup program deploy" >&2
+  return 1
+}
+
+deploy_program_if_configured() {
+  if [[ -z "$PROGRAM_SO_PATH$PROGRAM_ID_KEYPAIR_PATH$UPGRADE_AUTHORITY_PATH" ]]; then
+    return 0
+  fi
+
+  if [[ -z "$PROGRAM_SO_PATH" || -z "$PROGRAM_ID_KEYPAIR_PATH" || -z "$UPGRADE_AUTHORITY_PATH" ]]; then
+    echo "startup program deploy config is incomplete; require program .so, program id keypair, and upgrade authority keypair" >&2
+    return 1
+  fi
+  if [[ ! -f "$PROGRAM_SO_PATH" ]]; then
+    echo "startup program .so not found: $PROGRAM_SO_PATH" >&2
+    return 1
+  fi
+  if [[ ! -f "$PROGRAM_ID_KEYPAIR_PATH" ]]; then
+    echo "program id keypair not found: $PROGRAM_ID_KEYPAIR_PATH" >&2
+    return 1
+  fi
+  if [[ ! -f "$UPGRADE_AUTHORITY_PATH" ]]; then
+    echo "upgrade authority keypair not found: $UPGRADE_AUTHORITY_PATH" >&2
+    return 1
+  fi
+
+  echo "waiting for local validator RPC before program deploy..."
+  if ! wait_for_local_rpc; then
+    return 1
+  fi
+
+  local authority_pubkey
+  authority_pubkey="$(solana address --keypair "$UPGRADE_AUTHORITY_PATH")"
+  local program_pubkey
+  program_pubkey="$(solana address --keypair "$PROGRAM_ID_KEYPAIR_PATH")"
+  echo "airdropping SOL to upgrade authority $authority_pubkey"
+  solana airdrop 100 "$authority_pubkey" -u http://127.0.0.1:8899 >/dev/null
+
+  echo "deploying program $program_pubkey from $PROGRAM_SO_PATH"
+  solana program deploy \
+    -u http://127.0.0.1:8899 \
+    "$PROGRAM_SO_PATH" \
+    --program-id "$PROGRAM_ID_KEYPAIR_PATH" \
+    --upgrade-authority "$UPGRADE_AUTHORITY_PATH" \
+    --keypair "$UPGRADE_AUTHORITY_PATH"
 }
 
 args=(
@@ -50,15 +115,20 @@ fi
 
 solana-test-validator "${args[@]}" &
 validator_pid=$!
-
-nginx -g 'daemon off;' &
-nginx_pid=$!
+nginx_pid=""
 
 cleanup() {
-  kill "$validator_pid" "$nginx_pid" 2>/dev/null || true
+  kill "${validator_pid:-}" "${nginx_pid:-}" 2>/dev/null || true
 }
 
 trap cleanup INT TERM EXIT
+
+if ! deploy_program_if_configured; then
+  exit 1
+fi
+
+nginx -g 'daemon off;' &
+nginx_pid=$!
 
 wait -n "$validator_pid" "$nginx_pid"
 exit_code=$?

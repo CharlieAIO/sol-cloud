@@ -18,6 +18,10 @@ var (
 	initLedgerLimitSize  uint64
 	initCloneAccounts    []string
 	initCloneUpPrograms  []string
+	initProgramSOPath    string
+	initProgramIDKeypair string
+	initProgramIDLegacy  string
+	initUpgradeAuthority string
 	initForce            bool
 )
 
@@ -29,6 +33,7 @@ var initCmd = &cobra.Command{
   sol-cloud init --app-name my-validator --region ord
   sol-cloud init --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000 --ledger-limit-size 10000
   sol-cloud init --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
+  sol-cloud init --program-so ./programs/my_program.so --program-id-keypair ./keys/program-keypair.json --upgrade-authority ./keys/upgrade-authority.json
   sol-cloud init --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		const file = ".sol-cloud.yml"
@@ -56,6 +61,17 @@ var initCmd = &cobra.Command{
 		if initCloneUpPrograms != nil {
 			cfg.CloneUpgradeablePrograms = append([]string(nil), initCloneUpPrograms...)
 		}
+		programIDKeypair := initProgramIDKeypair
+		if strings.TrimSpace(programIDKeypair) == "" {
+			programIDKeypair = initProgramIDLegacy
+		}
+		if initProgramSOPath != "" || programIDKeypair != "" || initUpgradeAuthority != "" {
+			cfg.ProgramDeploy = validator.ProgramDeployConfig{
+				SOPath:               initProgramSOPath,
+				ProgramIDKeypairPath: programIDKeypair,
+				UpgradeAuthorityPath: initUpgradeAuthority,
+			}
+		}
 		cfg.ApplyDefaults()
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("invalid validator config: %w", err)
@@ -70,6 +86,9 @@ var initCmd = &cobra.Command{
 		escapedRegion := strings.ReplaceAll(region, `"`, `\"`)
 		cloneAccountsYAML := renderYAMLStringList(cfg.CloneAccounts, "    ")
 		cloneProgramsYAML := renderYAMLStringList(cfg.CloneUpgradeablePrograms, "    ")
+		escapedSOPath := strings.ReplaceAll(cfg.ProgramDeploy.SOPath, `"`, `\"`)
+		escapedProgramIDKeypair := strings.ReplaceAll(cfg.ProgramDeploy.ProgramIDKeypairPath, `"`, `\"`)
+		escapedUpgradeAuth := strings.ReplaceAll(cfg.ProgramDeploy.UpgradeAuthorityPath, `"`, `\"`)
 
 		starter := fmt.Sprintf(`provider: fly
 app_name: "%s"
@@ -83,7 +102,11 @@ validator:
 %s
   clone_upgradeable_programs:
 %s
-`, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneAccountsYAML, cloneProgramsYAML)
+  program_deploy:
+    so_path: "%s"
+    program_id_keypair: "%s"
+    upgrade_authority: "%s"
+`, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneAccountsYAML, cloneProgramsYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
 
 		if err := os.WriteFile(file, []byte(starter), 0o644); err != nil {
 			return fmt.Errorf("write config: %w", err)
@@ -105,6 +128,11 @@ func init() {
 	initCmd.Flags().Uint64Var(&initLedgerLimitSize, "ledger-limit-size", validator.DefaultLedgerLimitSize, "validator ledger limit size")
 	initCmd.Flags().StringSliceVar(&initCloneAccounts, "clone", nil, "repeatable account pubkey(s) to add as validator.clone_accounts")
 	initCmd.Flags().StringSliceVar(&initCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to add as validator.clone_upgradeable_programs")
+	initCmd.Flags().StringVar(&initProgramSOPath, "program-so", "", "optional .so path to set validator.program_deploy.so_path")
+	initCmd.Flags().StringVar(&initProgramIDKeypair, "program-id-keypair", "", "optional keypair path to set validator.program_deploy.program_id_keypair")
+	initCmd.Flags().StringVar(&initProgramIDLegacy, "program-id", "", "deprecated alias for --program-id-keypair")
+	_ = initCmd.Flags().MarkDeprecated("program-id", "use --program-id-keypair with a keypair path")
+	initCmd.Flags().StringVar(&initUpgradeAuthority, "upgrade-authority", "", "optional keypair path to set validator.program_deploy.upgrade_authority")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite .sol-cloud.yml if it already exists")
 }
 

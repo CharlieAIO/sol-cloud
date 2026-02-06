@@ -11,6 +11,7 @@ RUN mkdir -p /var/lib/solana/ledger
 
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY entrypoint.sh /usr/local/bin/start-solana.sh
+COPY program /opt/sol-cloud/program
 RUN chmod +x /usr/local/bin/start-solana.sh
 
 EXPOSE 8080

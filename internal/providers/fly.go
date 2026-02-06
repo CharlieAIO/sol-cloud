@@ -53,6 +53,14 @@ type flyValidatorTemplateData struct {
 	LedgerLimitSize          uint64
 	CloneAccounts            []string
 	CloneUpgradeablePrograms []string
+	ProgramDeploy            flyProgramDeployTemplateData
+}
+
+type flyProgramDeployTemplateData struct {
+	Enabled              bool
+	SOPath               string
+	ProgramIDKeypairPath string
+	UpgradeAuthorityPath string
 }
 
 func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, error) {
@@ -83,6 +91,15 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create artifacts directory: %w", err)
 	}
+	programDir := filepath.Join(artifactsDir, "program")
+	if err := os.MkdirAll(programDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create program artifacts directory: %w", err)
+	}
+
+	programDeployData, err := prepareProgramDeployData(projectDir, programDir, cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	data := flyTemplateData{
 		Name:   cfg.Name,
@@ -94,6 +111,7 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 			LedgerLimitSize:          cfg.Validator.LedgerLimitSize,
 			CloneAccounts:            append([]string(nil), cfg.Validator.CloneAccounts...),
 			CloneUpgradeablePrograms: append([]string(nil), cfg.Validator.CloneUpgradeablePrograms...),
+			ProgramDeploy:            programDeployData,
 		},
 	}
 
@@ -241,6 +259,103 @@ func (p *FlyProvider) flyctlBin() string {
 		return p.FlyctlBin
 	}
 	return defaultFlyctlBin
+}
+
+func prepareProgramDeployData(projectDir, programDir string, cfg *Config) (flyProgramDeployTemplateData, error) {
+	if cfg == nil {
+		return flyProgramDeployTemplateData{}, errors.New("config is required")
+	}
+
+	programCfg := cfg.Validator.ProgramDeploy
+	if !programCfg.HasValues() {
+		return flyProgramDeployTemplateData{}, nil
+	}
+	if !programCfg.Enabled() {
+		return flyProgramDeployTemplateData{}, errors.New("program deploy config is incomplete")
+	}
+
+	soSrc, err := resolveProjectPath(projectDir, programCfg.SOPath)
+	if err != nil {
+		return flyProgramDeployTemplateData{}, fmt.Errorf("resolve program_deploy.so_path: %w", err)
+	}
+	programIDKeypairSrc, err := resolveProjectPath(projectDir, programCfg.ProgramIDKeypairPath)
+	if err != nil {
+		return flyProgramDeployTemplateData{}, fmt.Errorf("resolve program_deploy.program_id_keypair: %w", err)
+	}
+	upgradeAuthoritySrc, err := resolveProjectPath(projectDir, programCfg.UpgradeAuthorityPath)
+	if err != nil {
+		return flyProgramDeployTemplateData{}, fmt.Errorf("resolve program_deploy.upgrade_authority: %w", err)
+	}
+
+	soDest := filepath.Join(programDir, "program.so")
+	if err := copyFile(soSrc, soDest); err != nil {
+		return flyProgramDeployTemplateData{}, fmt.Errorf("copy program binary: %w", err)
+	}
+	programIDKeypairDest := filepath.Join(programDir, "program-id-keypair.json")
+	if err := copyFile(programIDKeypairSrc, programIDKeypairDest); err != nil {
+		return flyProgramDeployTemplateData{}, fmt.Errorf("copy program id keypair: %w", err)
+	}
+	upgradeAuthorityDest := filepath.Join(programDir, "upgrade-authority.json")
+	if err := copyFile(upgradeAuthoritySrc, upgradeAuthorityDest); err != nil {
+		return flyProgramDeployTemplateData{}, fmt.Errorf("copy upgrade authority keypair: %w", err)
+	}
+
+	return flyProgramDeployTemplateData{
+		Enabled:              true,
+		SOPath:               "/opt/sol-cloud/program/program.so",
+		ProgramIDKeypairPath: "/opt/sol-cloud/program/program-id-keypair.json",
+		UpgradeAuthorityPath: "/opt/sol-cloud/program/upgrade-authority.json",
+	}, nil
+}
+
+func resolveProjectPath(projectDir, pathValue string) (string, error) {
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		return "", errors.New("path is empty")
+	}
+
+	clean := pathValue
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Join(projectDir, clean)
+	}
+	clean = filepath.Clean(clean)
+
+	info, err := os.Stat(clean)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory", clean)
+	}
+	return clean, nil
+}
+
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	info, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+	mode := info.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+	return nil
 }
 
 func renderTemplateFile(src, dst string, data any) error {
