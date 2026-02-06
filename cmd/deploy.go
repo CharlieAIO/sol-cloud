@@ -8,6 +8,7 @@ import (
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
+	"github.com/CharlieAIO/sol-cloud/internal/utils"
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -54,7 +55,7 @@ var deployCmd = &cobra.Command{
 		if name == "" {
 			return fmt.Errorf("app_name is required in .sol-cloud.yml; run `sol-cloud init` first")
 		}
-		name, err := ensureFlyAppName(name)
+		name, err := utils.EnsureFlyAppName(name)
 		if err != nil {
 			return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
 		}
