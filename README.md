@@ -18,13 +18,6 @@ Start in 3 steps:
 
 ## Install
 
-### [Homebrew](https://brew.sh/)
-
-```bash
-brew tap CharlieAIO/sol-cloud
-brew install sol-cloud
-```
-
 ### macOS / Linux (curl)
 
 ```bash
@@ -59,6 +52,8 @@ iwr https://raw.githubusercontent.com/CharlieAIO/sol-cloud/main/scripts/install.
 ```bash
 go install github.com/CharlieAIO/sol-cloud@latest
 ```
+
+Maintainers: Homebrew tap automation setup is in `docs/HOMEBREW_TAP_SETUP.md`.
 
 ## Quick start 🚀
 
