@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+solana-test-validator \
+  --ledger /var/lib/solana/ledger \
+  --bind-address 0.0.0.0  \
+  --dynamic-port-range 8000-8020 \
+  --reset \
+  --url https://api.mainnet-beta.solana.com \
+  --limit-ledger-size 10000 \
+  --slots-per-epoch {{ .Validator.SlotsPerEpoch }} &
+validator_pid=$!
+
+nginx -g 'daemon off;' &
+nginx_pid=$!
+
+cleanup() {
+  kill "$validator_pid" "$nginx_pid" 2>/dev/null || true
+}
+
+trap cleanup INT TERM EXIT
+
+wait -n "$validator_pid" "$nginx_pid"
+exit_code=$?
+cleanup
+wait "$validator_pid" "$nginx_pid" 2>/dev/null || true
+exit "$exit_code"
