@@ -1,87 +1,122 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
 	"github.com/spf13/cobra"
 )
 
-var (
-	initAppName          string
-	initRegion           string
-	initSlotsPerEpoch    uint64
-	initTicksPerSlot     uint64
-	initComputeUnitLimit uint64
-	initLedgerLimitSize  uint64
-	initCloneAccounts    []string
-	initCloneUpPrograms  []string
-	initProgramSOPath    string
-	initProgramIDKeypair string
-	initProgramIDLegacy  string
-	initUpgradeAuthority string
-	initForce            bool
-)
+var initForce bool
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Create a starter config file",
-	Long:  "Create a .sol-cloud.yml starter file in the current directory.",
+	Short: "Run interactive setup and create .sol-cloud.yml",
+	Long:  "Run an interactive setup flow and write a .sol-cloud.yml file in the current directory.",
 	Example: `  sol-cloud init
-  sol-cloud init --app-name my-validator --region ord
-  sol-cloud init --slots-per-epoch 216000 --ticks-per-slot 32 --compute-unit-limit 300000 --ledger-limit-size 10000
-  sol-cloud init --clone 11111111111111111111111111111111 --clone-upgradeable-program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
-  sol-cloud init --program-so ./programs/my_program.so --program-id-keypair ./keys/program-keypair.json --upgrade-authority ./keys/upgrade-authority.json
   sol-cloud init --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		const file = ".sol-cloud.yml"
-		if _, err := os.Stat(file); err == nil && !initForce {
-			fmt.Fprintln(cmd.OutOrStdout(), ".sol-cloud.yml already exists (use --force to overwrite)")
-			return nil
+		out := cmd.OutOrStdout()
+		reader := bufio.NewReader(cmd.InOrStdin())
+
+		if _, err := os.Stat(file); err == nil {
+			if !initForce {
+				overwrite, promptErr := promptYesNo(reader, out, ".sol-cloud.yml already exists. Overwrite it?", false)
+				if promptErr != nil {
+					return promptErr
+				}
+				if !overwrite {
+					fmt.Fprintln(out, "init cancelled; existing .sol-cloud.yml was not changed")
+					return nil
+				}
+			}
+		}
+
+		fmt.Fprintln(out, "Sol-Cloud setup")
+		fmt.Fprintln(out, "Press Enter to accept defaults.")
+		fmt.Fprintln(out)
+
+		appName, err := promptString(reader, out, "Fly app name", defaultAppName(), true)
+		if err != nil {
+			return err
+		}
+		region, err := promptString(reader, out, "Fly region", "ord", true)
+		if err != nil {
+			return err
 		}
 
 		cfg := validator.DefaultConfig()
-		if initSlotsPerEpoch > 0 {
-			cfg.SlotsPerEpoch = initSlotsPerEpoch
+		customizeRuntime, err := promptYesNo(reader, out, "Customize validator runtime settings?", false)
+		if err != nil {
+			return err
 		}
-		if initTicksPerSlot > 0 {
-			cfg.TicksPerSlot = initTicksPerSlot
-		}
-		if initComputeUnitLimit > 0 {
-			cfg.ComputeUnitLimit = initComputeUnitLimit
-		}
-		if initLedgerLimitSize > 0 {
-			cfg.LedgerLimitSize = initLedgerLimitSize
-		}
-		if initCloneAccounts != nil {
-			cfg.CloneAccounts = append([]string(nil), initCloneAccounts...)
-		}
-		if initCloneUpPrograms != nil {
-			cfg.CloneUpgradeablePrograms = append([]string(nil), initCloneUpPrograms...)
-		}
-		programIDKeypair := initProgramIDKeypair
-		if strings.TrimSpace(programIDKeypair) == "" {
-			programIDKeypair = initProgramIDLegacy
-		}
-		if initProgramSOPath != "" || programIDKeypair != "" || initUpgradeAuthority != "" {
-			cfg.ProgramDeploy = validator.ProgramDeployConfig{
-				SOPath:               initProgramSOPath,
-				ProgramIDKeypairPath: programIDKeypair,
-				UpgradeAuthorityPath: initUpgradeAuthority,
+		if customizeRuntime {
+			cfg.SlotsPerEpoch, err = promptUint64(reader, out, "Slots per epoch", cfg.SlotsPerEpoch, true)
+			if err != nil {
+				return err
+			}
+			cfg.TicksPerSlot, err = promptUint64(reader, out, "Ticks per slot", cfg.TicksPerSlot, true)
+			if err != nil {
+				return err
+			}
+			cfg.ComputeUnitLimit, err = promptUint64(reader, out, "Compute unit limit", cfg.ComputeUnitLimit, true)
+			if err != nil {
+				return err
+			}
+			cfg.LedgerLimitSize, err = promptUint64(reader, out, "Ledger limit size", cfg.LedgerLimitSize, true)
+			if err != nil {
+				return err
 			}
 		}
-		cfg.ApplyDefaults()
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("invalid validator config: %w", err)
+
+		cloneAccountsRaw, err := promptString(reader, out, "Clone account list (comma-separated, optional)", "", false)
+		if err != nil {
+			return err
+		}
+		cfg.CloneAccounts = parseCSVList(cloneAccountsRaw)
+
+		cloneProgramsRaw, err := promptString(reader, out, "Clone upgradeable program list (comma-separated, optional)", "", false)
+		if err != nil {
+			return err
+		}
+		cfg.CloneUpgradeablePrograms = parseCSVList(cloneProgramsRaw)
+
+		configureStartupDeploy, err := promptYesNo(reader, out, "Configure startup program deploy?", false)
+		if err != nil {
+			return err
+		}
+		if configureStartupDeploy {
+			soPath, promptErr := promptString(reader, out, "Program .so path", "", true)
+			if promptErr != nil {
+				return promptErr
+			}
+			programIDKeypair, promptErr := promptString(reader, out, "Program ID keypair path", "", true)
+			if promptErr != nil {
+				return promptErr
+			}
+			upgradeAuthorityPath, promptErr := promptString(reader, out, "Upgrade authority keypair path", "", true)
+			if promptErr != nil {
+				return promptErr
+			}
+			cfg.ProgramDeploy = validator.ProgramDeployConfig{
+				SOPath:               soPath,
+				ProgramIDKeypairPath: programIDKeypair,
+				UpgradeAuthorityPath: upgradeAuthorityPath,
+			}
 		}
 
-		region := strings.TrimSpace(initRegion)
-		if region == "" {
-			region = "ord"
+		cfg.ApplyDefaults()
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("invalid setup values: %w", err)
 		}
-		appName := strings.TrimSpace(initAppName)
+
 		escapedAppName := strings.ReplaceAll(appName, `"`, `\"`)
 		escapedRegion := strings.ReplaceAll(region, `"`, `\"`)
 		cloneAccountsYAML := renderYAMLStringList(cfg.CloneAccounts, "    ")
@@ -112,7 +147,7 @@ validator:
 			return fmt.Errorf("write config: %w", err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", file)
+		fmt.Fprintf(out, "created %s\n", file)
 		return nil
 	},
 }
@@ -120,19 +155,6 @@ validator:
 func init() {
 	rootCmd.AddCommand(initCmd)
 
-	initCmd.Flags().StringVar(&initAppName, "app-name", "", "Default Fly app name to write into config")
-	initCmd.Flags().StringVar(&initRegion, "region", "ord", "Default Fly region to write into config")
-	initCmd.Flags().Uint64Var(&initSlotsPerEpoch, "slots-per-epoch", validator.DefaultSlotsPerEpoch, "validator slots per epoch")
-	initCmd.Flags().Uint64Var(&initTicksPerSlot, "ticks-per-slot", validator.DefaultTicksPerSlot, "validator ticks per slot")
-	initCmd.Flags().Uint64Var(&initComputeUnitLimit, "compute-unit-limit", validator.DefaultComputeUnitLimit, "validator compute unit limit")
-	initCmd.Flags().Uint64Var(&initLedgerLimitSize, "ledger-limit-size", validator.DefaultLedgerLimitSize, "validator ledger limit size")
-	initCmd.Flags().StringSliceVar(&initCloneAccounts, "clone", nil, "repeatable account pubkey(s) to add as validator.clone_accounts")
-	initCmd.Flags().StringSliceVar(&initCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to add as validator.clone_upgradeable_programs")
-	initCmd.Flags().StringVar(&initProgramSOPath, "program-so", "", "optional .so path to set validator.program_deploy.so_path")
-	initCmd.Flags().StringVar(&initProgramIDKeypair, "program-id-keypair", "", "optional keypair path to set validator.program_deploy.program_id_keypair")
-	initCmd.Flags().StringVar(&initProgramIDLegacy, "program-id", "", "deprecated alias for --program-id-keypair")
-	_ = initCmd.Flags().MarkDeprecated("program-id", "use --program-id-keypair with a keypair path")
-	initCmd.Flags().StringVar(&initUpgradeAuthority, "upgrade-authority", "", "optional keypair path to set validator.program_deploy.upgrade_authority")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite .sol-cloud.yml if it already exists")
 }
 
@@ -146,4 +168,131 @@ func renderYAMLStringList(values []string, indent string) string {
 		lines = append(lines, fmt.Sprintf("%s- \"%s\"", indent, escaped))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func parseCSVList(input string) []string {
+	if strings.TrimSpace(input) == "" {
+		return []string{}
+	}
+	parts := strings.Split(input, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func promptString(reader *bufio.Reader, out io.Writer, label, defaultValue string, required bool) (string, error) {
+	for {
+		if strings.TrimSpace(defaultValue) == "" {
+			fmt.Fprintf(out, "%s: ", label)
+		} else {
+			fmt.Fprintf(out, "%s [%s]: ", label, defaultValue)
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+
+		value := strings.TrimSpace(line)
+		if value == "" {
+			value = strings.TrimSpace(defaultValue)
+		}
+		if required && value == "" {
+			fmt.Fprintln(out, "value is required")
+			if err == io.EOF {
+				return "", io.ErrUnexpectedEOF
+			}
+			continue
+		}
+		return value, nil
+	}
+}
+
+func promptYesNo(reader *bufio.Reader, out io.Writer, label string, defaultYes bool) (bool, error) {
+	defaultLabel := "y/N"
+	if defaultYes {
+		defaultLabel = "Y/n"
+	}
+	for {
+		fmt.Fprintf(out, "%s [%s]: ", label, defaultLabel)
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return false, err
+		}
+
+		answer := strings.ToLower(strings.TrimSpace(line))
+		switch answer {
+		case "":
+			return defaultYes, nil
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(out, "enter y or n")
+			if err == io.EOF {
+				return false, io.ErrUnexpectedEOF
+			}
+		}
+	}
+}
+
+func promptUint64(reader *bufio.Reader, out io.Writer, label string, defaultValue uint64, required bool) (uint64, error) {
+	for {
+		value, err := promptString(reader, out, label, strconv.FormatUint(defaultValue, 10), required)
+		if err != nil {
+			return 0, err
+		}
+		if value == "" && !required {
+			return 0, nil
+		}
+
+		parsed, parseErr := strconv.ParseUint(value, 10, 64)
+		if parseErr != nil {
+			fmt.Fprintln(out, "enter a valid positive integer")
+			continue
+		}
+		return parsed, nil
+	}
+}
+
+func defaultAppName() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "sol-cloud-validator"
+	}
+
+	base := strings.ToLower(filepath.Base(wd))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range base {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+
+	clean := strings.Trim(b.String(), "-")
+	if clean == "" {
+		return "sol-cloud-validator"
+	}
+	if len(clean) > 40 {
+		clean = clean[:40]
+		clean = strings.Trim(clean, "-")
+	}
+	if clean == "" {
+		return "sol-cloud-validator"
+	}
+	return clean
 }
