@@ -13,7 +13,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var initForce bool
+var (
+	initForce    bool
+	initYes      bool
+	initProvider string
+)
 
 var providerOptions = []utils.Option{
 	{Key: "fly", Label: "Fly.io"},
@@ -61,14 +65,16 @@ var initCmd = &cobra.Command{
 	Short: "Run interactive setup and create .sol-cloud.yml",
 	Long:  "Run an interactive setup flow and write a .sol-cloud.yml file in the current directory.",
 	Example: `  sol-cloud init
-  sol-cloud init --force`,
+  sol-cloud init --force
+  sol-cloud init --yes
+  sol-cloud init --yes --provider railway`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		const file = ".sol-cloud.yml"
 		out := cmd.OutOrStdout()
 		reader := bufio.NewReader(cmd.InOrStdin())
 
 		if _, err := os.Stat(file); err == nil {
-			if !initForce {
+			if !initForce && !initYes {
 				overwrite, promptErr := utils.YesNo(reader, out, ".sol-cloud.yml already exists. Overwrite it?", false)
 				if promptErr != nil {
 					return promptErr
@@ -80,18 +86,50 @@ var initCmd = &cobra.Command{
 			}
 		}
 
+		// --yes: skip all prompts, generate app name, use defaults.
+		if initYes {
+			providerName := strings.ToLower(strings.TrimSpace(initProvider))
+			if providerName == "" {
+				providerName = "fly"
+			}
+			if providerName != "fly" && providerName != "railway" {
+				return fmt.Errorf("unsupported provider %q: valid providers are fly, railway", providerName)
+			}
+
+			var appName, region string
+			var genErr error
+			switch providerName {
+			case "railway":
+				appName, genErr = utils.GenerateRailwayProjectName()
+				region = "us-west"
+			default:
+				appName, genErr = utils.GenerateFlyAppName()
+				region = "ord"
+			}
+			if genErr != nil {
+				return genErr
+			}
+
+			cfg := validator.DefaultConfig()
+			return writeInitConfig(out, file, providerName, appName, region, cfg)
+		}
+
 		fmt.Fprintln(out, "Sol-Cloud setup")
 		fmt.Fprintln(out, "Press Enter to accept defaults.")
 		fmt.Fprintln(out)
 
-		providerName, err := utils.SelectOptionArrow(cmd.InOrStdin(), out, "Provider", providerOptions, "fly")
-		if err != nil {
-			// Fall back to prompt if terminal is not interactive.
-			providerName, err = utils.String(reader, out, "Provider (fly or railway)", "fly", true)
+		providerName := strings.ToLower(strings.TrimSpace(initProvider))
+		var err error
+		if providerName == "" {
+			providerName, err = utils.SelectOptionArrow(cmd.InOrStdin(), out, "Provider", providerOptions, "fly")
 			if err != nil {
-				return err
+				// Fall back to prompt if terminal is not interactive.
+				providerName, err = utils.String(reader, out, "Provider (fly or railway)", "fly", true)
+				if err != nil {
+					return err
+				}
+				providerName = strings.ToLower(strings.TrimSpace(providerName))
 			}
-			providerName = strings.ToLower(strings.TrimSpace(providerName))
 		}
 
 		var appName string
@@ -184,20 +222,25 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		cfg.ApplyDefaults()
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("invalid setup values: %w", err)
-		}
+		return writeInitConfig(out, file, providerName, appName, region, cfg)
+	},
+}
 
-		escapedAppName := strings.ReplaceAll(appName, `"`, `\"`)
-		escapedRegion := strings.ReplaceAll(region, `"`, `\"`)
-		cloneProgramsYAML := renderYAMLStringList(cfg.ClonePrograms, "    ")
-		airdropYAML := renderYAMLAirdropList(cfg.AirdropAccounts, "    ")
-		escapedSOPath := strings.ReplaceAll(cfg.ProgramDeploy.SOPath, `"`, `\"`)
-		escapedProgramIDKeypair := strings.ReplaceAll(cfg.ProgramDeploy.ProgramIDKeypairPath, `"`, `\"`)
-		escapedUpgradeAuth := strings.ReplaceAll(cfg.ProgramDeploy.UpgradeAuthorityPath, `"`, `\"`)
+func writeInitConfig(out interface{ Write([]byte) (int, error) }, file, providerName, appName, region string, cfg validator.Config) error {
+	cfg.ApplyDefaults()
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid setup values: %w", err)
+	}
 
-		starter := fmt.Sprintf(`provider: %s
+	escapedAppName := strings.ReplaceAll(appName, `"`, `\"`)
+	escapedRegion := strings.ReplaceAll(region, `"`, `\"`)
+	cloneProgramsYAML := renderYAMLStringList(cfg.ClonePrograms, "    ")
+	airdropYAML := renderYAMLAirdropList(cfg.AirdropAccounts, "    ")
+	escapedSOPath := strings.ReplaceAll(cfg.ProgramDeploy.SOPath, `"`, `\"`)
+	escapedProgramIDKeypair := strings.ReplaceAll(cfg.ProgramDeploy.ProgramIDKeypairPath, `"`, `\"`)
+	escapedUpgradeAuth := strings.ReplaceAll(cfg.ProgramDeploy.UpgradeAuthorityPath, `"`, `\"`)
+
+	content := fmt.Sprintf(`provider: %s
 app_name: "%s"
 region: "%s"
 validator:
@@ -215,19 +258,20 @@ validator:
     upgrade_authority: "%s"
 `, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneProgramsYAML, airdropYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
 
-		if err := os.WriteFile(file, []byte(starter), 0o644); err != nil {
-			return fmt.Errorf("write config: %w", err)
-		}
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
 
-		fmt.Fprintf(out, "created %s\n", file)
-		return nil
-	},
+	fmt.Fprintf(out, "created %s\n", file)
+	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(initCmd)
 
 	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite .sol-cloud.yml if it already exists")
+	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "Skip all prompts; write config with generated app name and validator defaults")
+	initCmd.Flags().StringVar(&initProvider, "provider", "", "Provider to use (fly or railway); defaults to fly when --yes is set")
 }
 
 func promptFlyRegion(in io.Reader, reader *bufio.Reader, out io.Writer, defaultRegion string) (string, error) {
