@@ -16,6 +16,17 @@ supports_flag() {
   grep -q -- "$flag" <<<"$help_output"
 }
 
+# Clone a program from clone_programs using --clone-upgradeable-program.
+# This works for both upgradeable and legacy BPF programs.
+clone_program_auto() {
+  local pubkey="$1"
+  if supports_flag --clone-upgradeable-program; then
+    args+=(--clone-upgradeable-program "$pubkey")
+  else
+    echo "warning: --clone-upgradeable-program not supported; skipping $pubkey" >&2
+  fi
+}
+
 wait_for_local_rpc() {
   local endpoint="http://127.0.0.1:8899"
   local payload='{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
@@ -78,6 +89,21 @@ deploy_program_if_configured() {
     --keypair "$UPGRADE_AUTHORITY_PATH"
 }
 
+{{- if .Validator.AirdropAccounts }}
+airdrop_configured_accounts() {
+  echo "waiting for local validator RPC before airdrops..."
+  if ! wait_for_local_rpc; then
+    echo "warning: validator did not become ready; skipping airdrops" >&2
+    return 0
+  fi
+{{- range .Validator.AirdropAccounts }}
+  echo "airdropping {{ .Amount }} SOL to {{ .Address }}"
+  solana airdrop {{ .Amount }} "{{ .Address }}" -u http://127.0.0.1:8899 \
+    || echo "warning: airdrop to {{ .Address }} failed" >&2
+{{- end }}
+}
+{{- end }}
+
 # Check if ledger directory has existing data
 LEDGER_DIR="/var/lib/solana/ledger"
 if [ -d "$LEDGER_DIR" ] && [ "$(ls -A $LEDGER_DIR 2>/dev/null)" ]; then
@@ -109,6 +135,10 @@ else
   echo "warning: this solana-test-validator build does not support --compute-unit-limit; continuing without it" >&2
 fi
 
+{{- range .Validator.ClonePrograms }}
+clone_program_auto "{{ . }}"
+{{- end }}
+
 {{- range .Validator.CloneAccounts }}
 if supports_flag --clone; then
   args+=(--clone "{{ . }}")
@@ -138,6 +168,10 @@ trap cleanup INT TERM EXIT
 if ! deploy_program_if_configured; then
   exit 1
 fi
+
+{{- if .Validator.AirdropAccounts }}
+airdrop_configured_accounts
+{{- end }}
 
 nginx -g 'daemon off;' &
 nginx_pid=$!

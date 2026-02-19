@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,8 +26,10 @@ var (
 	deployTicksPerSlot       uint64
 	deployComputeUnitLimit   uint64
 	deployLedgerLimitSize    uint64
+	deployClonePrograms      []string
 	deployCloneAccounts      []string
 	deployCloneUpPrograms    []string
+	deployAirdropRaw         []string // each entry: "ADDRESS" or "ADDRESS:AMOUNT"
 	deployProgramSOPath      string
 	deployProgramIDKeypair   string
 	deployProgramIDLegacy    string
@@ -88,13 +91,18 @@ var deployCmd = &cobra.Command{
 			return fmt.Errorf("get working directory: %w", err)
 		}
 
+		var airdropAccounts []validator.AirdropEntry
+		_ = viper.UnmarshalKey("validator.airdrop_accounts", &airdropAccounts)
+
 		validatorCfg := validator.Config{
 			SlotsPerEpoch:            viper.GetUint64("validator.slots_per_epoch"),
 			TicksPerSlot:             viper.GetUint64("validator.ticks_per_slot"),
 			ComputeUnitLimit:         viper.GetUint64("validator.compute_unit_limit"),
 			LedgerLimitSize:          viper.GetUint64("validator.ledger_limit_size"),
+			ClonePrograms:            viper.GetStringSlice("validator.clone_programs"),
 			CloneAccounts:            viper.GetStringSlice("validator.clone_accounts"),
 			CloneUpgradeablePrograms: viper.GetStringSlice("validator.clone_upgradeable_programs"),
+			AirdropAccounts:          airdropAccounts,
 			ProgramDeploy: validator.ProgramDeployConfig{
 				SOPath:               viper.GetString("validator.program_deploy.so_path"),
 				ProgramIDKeypairPath: viper.GetString("validator.program_deploy.program_id_keypair"),
@@ -118,6 +126,9 @@ var deployCmd = &cobra.Command{
 		if deployLedgerLimitSize > 0 {
 			validatorCfg.LedgerLimitSize = deployLedgerLimitSize
 		}
+		if cmd.Flags().Changed("clone-program") {
+			validatorCfg.ClonePrograms = append([]string(nil), deployClonePrograms...)
+		}
 		if cmd.Flags().Changed("clone") {
 			validatorCfg.CloneAccounts = append([]string(nil), deployCloneAccounts...)
 		}
@@ -135,6 +146,13 @@ var deployCmd = &cobra.Command{
 		}
 		if cmd.Flags().Changed("upgrade-authority") {
 			validatorCfg.ProgramDeploy.UpgradeAuthorityPath = deployUpgradeAuthority
+		}
+		if cmd.Flags().Changed("airdrop") {
+			parsed, parseErr := parseAirdropFlags(deployAirdropRaw)
+			if parseErr != nil {
+				return fmt.Errorf("invalid --airdrop flag: %w", parseErr)
+			}
+			validatorCfg.AirdropAccounts = parsed
 		}
 		if err := validatorCfg.Validate(); err != nil {
 			return fmt.Errorf("invalid validator config: %w", err)
@@ -177,11 +195,12 @@ var deployCmd = &cobra.Command{
 			fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
 				validatorCfg.SlotsPerEpoch,
 				validatorCfg.TicksPerSlot,
 				validatorCfg.ComputeUnitLimit,
 				validatorCfg.LedgerLimitSize,
+				len(validatorCfg.ClonePrograms),
 				len(validatorCfg.CloneAccounts),
 				len(validatorCfg.CloneUpgradeablePrograms),
 			)
@@ -204,11 +223,12 @@ var deployCmd = &cobra.Command{
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "🧩 App:        %s\n", deployment.Name)
 		fmt.Fprintf(cmd.OutOrStdout(), "📁 Artifacts:  %s\n", deployment.ArtifactsDir)
-		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
+		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
 			validatorCfg.SlotsPerEpoch,
 			validatorCfg.TicksPerSlot,
 			validatorCfg.ComputeUnitLimit,
 			validatorCfg.LedgerLimitSize,
+			len(validatorCfg.ClonePrograms),
 			len(validatorCfg.CloneAccounts),
 			len(validatorCfg.CloneUpgradeablePrograms),
 		)
@@ -258,6 +278,7 @@ func init() {
 	deployCmd.Flags().Uint64Var(&deployTicksPerSlot, "ticks-per-slot", 0, "override validator.ticks_per_slot")
 	deployCmd.Flags().Uint64Var(&deployComputeUnitLimit, "compute-unit-limit", 0, "override validator.compute_unit_limit")
 	deployCmd.Flags().Uint64Var(&deployLedgerLimitSize, "ledger-limit-size", 0, "override validator.ledger_limit_size")
+	deployCmd.Flags().StringSliceVar(&deployClonePrograms, "clone-program", nil, "program/account pubkey(s) to clone; type is auto-detected at runtime (upgradeable or plain)")
 	deployCmd.Flags().StringSliceVar(&deployCloneAccounts, "clone", nil, "repeatable account pubkey(s) to pass as --clone to solana-test-validator")
 	deployCmd.Flags().StringSliceVar(&deployCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to pass as --clone-upgradeable-program")
 	deployCmd.Flags().StringVar(&deployProgramSOPath, "program-so", "", "path to .so file to deploy on validator startup (overrides validator.program_deploy.so_path)")
@@ -267,6 +288,7 @@ func init() {
 	deployCmd.Flags().StringVar(&deployUpgradeAuthority, "upgrade-authority", "", "path to upgrade authority keypair (overrides validator.program_deploy.upgrade_authority)")
 	deployCmd.Flags().IntVar(&deployVolumeSize, "volume-size", 10, "size of persistent ledger volume in GB")
 	deployCmd.Flags().BoolVar(&deploySkipVolume, "skip-volume", false, "skip volume creation, use ephemeral storage (data loss on restart)")
+	deployCmd.Flags().StringArrayVar(&deployAirdropRaw, "airdrop", nil, `airdrop SOL on startup; format: ADDRESS or ADDRESS:AMOUNT (default amount: 1000); repeatable`)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -276,4 +298,31 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseAirdropFlags converts raw --airdrop flag values ("ADDRESS" or "ADDRESS:AMOUNT")
+// into validator.AirdropEntry slice. A missing amount defaults to validator.DefaultAirdropAmount.
+func parseAirdropFlags(raw []string) ([]validator.AirdropEntry, error) {
+	entries := make([]validator.AirdropEntry, 0, len(raw))
+	for _, s := range raw {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		addr, amountStr, hasColon := strings.Cut(s, ":")
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return nil, fmt.Errorf("empty address in %q", s)
+		}
+		amount := validator.DefaultAirdropAmount
+		if hasColon {
+			n, err := strconv.ParseUint(strings.TrimSpace(amountStr), 10, 64)
+			if err != nil || n == 0 {
+				return nil, fmt.Errorf("invalid amount in %q: must be a positive integer", s)
+			}
+			amount = n
+		}
+		entries = append(entries, validator.AirdropEntry{Address: addr, Amount: amount})
+	}
+	return entries, nil
 }

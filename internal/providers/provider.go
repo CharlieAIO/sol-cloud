@@ -51,14 +51,24 @@ type Provider interface {
 	Restart(ctx context.Context, name string) error
 }
 
+// airdropEntryTemplateData holds a single airdrop recipient for use in templates.
+type airdropEntryTemplateData struct {
+	Address string
+	Amount  uint64
+}
+
 // validatorTemplateData holds validator config fields used in templates.
 type validatorTemplateData struct {
-	SlotsPerEpoch            uint64
-	TicksPerSlot             uint64
-	ComputeUnitLimit         uint64
-	LedgerLimitSize          uint64
+	SlotsPerEpoch    uint64
+	TicksPerSlot     uint64
+	ComputeUnitLimit uint64
+	LedgerLimitSize  uint64
+	// ClonePrograms is the unified list; the entrypoint auto-detects upgradeable vs plain.
+	ClonePrograms []string
+	// Legacy fields kept for backwards compatibility.
 	CloneAccounts            []string
 	CloneUpgradeablePrograms []string
+	AirdropAccounts          []airdropEntryTemplateData
 	ProgramDeploy            programDeployTemplateData
 }
 
@@ -68,6 +78,15 @@ type programDeployTemplateData struct {
 	SOPath               string
 	ProgramIDKeypairPath string
 	UpgradeAuthorityPath string
+}
+
+// toAirdropTemplateData converts validator.AirdropEntry slice to template data.
+func toAirdropTemplateData(entries []validator.AirdropEntry) []airdropEntryTemplateData {
+	out := make([]airdropEntryTemplateData, len(entries))
+	for i, e := range entries {
+		out[i] = airdropEntryTemplateData{Address: e.Address, Amount: e.Amount}
+	}
+	return out
 }
 
 // NewProvider returns a Provider for the given provider name.

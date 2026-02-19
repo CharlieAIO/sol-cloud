@@ -144,17 +144,21 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		cloneAccounts, err := utils.StringList(reader, out, "Clone account list (optional)", "Clone account")
+		clonePrograms, err := utils.StringList(reader, out, "Clone programs/accounts (optional, type auto-detected at runtime)", "Program/account pubkey")
 		if err != nil {
 			return err
 		}
-		cfg.CloneAccounts = cloneAccounts
+		cfg.ClonePrograms = clonePrograms
 
-		clonePrograms, err := utils.StringList(reader, out, "Clone upgradeable program list (optional)", "Clone upgradeable program")
+		airdropRaw, err := utils.StringList(reader, out, "Startup airdrop recipients (optional, format: ADDRESS or ADDRESS:AMOUNT)", "Airdrop recipient")
 		if err != nil {
 			return err
 		}
-		cfg.CloneUpgradeablePrograms = clonePrograms
+		airdropEntries, err := parseAirdropFlags(airdropRaw)
+		if err != nil {
+			return fmt.Errorf("invalid airdrop entry: %w", err)
+		}
+		cfg.AirdropAccounts = airdropEntries
 
 		configureStartupDeploy, err := utils.YesNo(reader, out, "Configure startup program deploy?", false)
 		if err != nil {
@@ -187,8 +191,8 @@ var initCmd = &cobra.Command{
 
 		escapedAppName := strings.ReplaceAll(appName, `"`, `\"`)
 		escapedRegion := strings.ReplaceAll(region, `"`, `\"`)
-		cloneAccountsYAML := renderYAMLStringList(cfg.CloneAccounts, "    ")
-		cloneProgramsYAML := renderYAMLStringList(cfg.CloneUpgradeablePrograms, "    ")
+		cloneProgramsYAML := renderYAMLStringList(cfg.ClonePrograms, "    ")
+		airdropYAML := renderYAMLAirdropList(cfg.AirdropAccounts, "    ")
 		escapedSOPath := strings.ReplaceAll(cfg.ProgramDeploy.SOPath, `"`, `\"`)
 		escapedProgramIDKeypair := strings.ReplaceAll(cfg.ProgramDeploy.ProgramIDKeypairPath, `"`, `\"`)
 		escapedUpgradeAuth := strings.ReplaceAll(cfg.ProgramDeploy.UpgradeAuthorityPath, `"`, `\"`)
@@ -201,15 +205,15 @@ validator:
   ticks_per_slot: %d
   compute_unit_limit: %d
   ledger_limit_size: %d
-  clone_accounts:
+  clone_programs:
 %s
-  clone_upgradeable_programs:
+  airdrop_accounts:
 %s
   program_deploy:
     so_path: "%s"
     program_id_keypair: "%s"
     upgrade_authority: "%s"
-`, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneAccountsYAML, cloneProgramsYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
+`, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneProgramsYAML, airdropYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
 
 		if err := os.WriteFile(file, []byte(starter), 0o644); err != nil {
 			return fmt.Errorf("write config: %w", err)
@@ -284,6 +288,21 @@ func renderYAMLStringList(values []string, indent string) string {
 	for _, value := range values {
 		escaped := strings.ReplaceAll(value, `"`, `\"`)
 		lines = append(lines, fmt.Sprintf("%s- \"%s\"", indent, escaped))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderYAMLAirdropList(entries []validator.AirdropEntry, indent string) string {
+	if len(entries) == 0 {
+		return indent + "[]"
+	}
+	lines := make([]string, 0, len(entries)*2)
+	for _, e := range entries {
+		escaped := strings.ReplaceAll(e.Address, `"`, `\"`)
+		lines = append(lines,
+			fmt.Sprintf("%s- address: \"%s\"", indent, escaped),
+			fmt.Sprintf("%s  amount: %d", indent, e.Amount),
+		)
 	}
 	return strings.Join(lines, "\n")
 }

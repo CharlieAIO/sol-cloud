@@ -21,14 +21,30 @@ const (
 
 var base58AddressPattern = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 
+const DefaultAirdropAmount uint64 = 1000
+
+// AirdropEntry specifies a wallet address and SOL amount to airdrop on validator startup.
+type AirdropEntry struct {
+	Address string `mapstructure:"address" yaml:"address"`
+	Amount  uint64 `mapstructure:"amount" yaml:"amount"`
+}
+
 // Config holds runtime validator parameters.
 type Config struct {
-	SlotsPerEpoch            uint64              `mapstructure:"slots_per_epoch" yaml:"slots_per_epoch"`
-	TicksPerSlot             uint64              `mapstructure:"ticks_per_slot" yaml:"ticks_per_slot"`
-	ComputeUnitLimit         uint64              `mapstructure:"compute_unit_limit" yaml:"compute_unit_limit"`
-	LedgerLimitSize          uint64              `mapstructure:"ledger_limit_size" yaml:"ledger_limit_size"`
-	CloneAccounts            []string            `mapstructure:"clone_accounts" yaml:"clone_accounts"`
+	SlotsPerEpoch    uint64 `mapstructure:"slots_per_epoch" yaml:"slots_per_epoch"`
+	TicksPerSlot     uint64 `mapstructure:"ticks_per_slot" yaml:"ticks_per_slot"`
+	ComputeUnitLimit uint64 `mapstructure:"compute_unit_limit" yaml:"compute_unit_limit"`
+	LedgerLimitSize  uint64 `mapstructure:"ledger_limit_size" yaml:"ledger_limit_size"`
+	// ClonePrograms is the unified list of program/account addresses to clone.
+	// At runtime the validator entrypoint auto-detects whether each address is a
+	// BPF upgradeable program and uses --clone-upgradeable-program or --clone
+	// accordingly.
+	ClonePrograms []string `mapstructure:"clone_programs" yaml:"clone_programs"`
+	// Deprecated: use ClonePrograms. Kept for backwards compatibility.
+	CloneAccounts []string `mapstructure:"clone_accounts" yaml:"clone_accounts"`
+	// Deprecated: use ClonePrograms. Kept for backwards compatibility.
 	CloneUpgradeablePrograms []string            `mapstructure:"clone_upgradeable_programs" yaml:"clone_upgradeable_programs"`
+	AirdropAccounts          []AirdropEntry      `mapstructure:"airdrop_accounts" yaml:"airdrop_accounts"`
 	ProgramDeploy            ProgramDeployConfig `mapstructure:"program_deploy" yaml:"program_deploy"`
 }
 
@@ -60,8 +76,10 @@ func DefaultConfig() Config {
 		TicksPerSlot:             DefaultTicksPerSlot,
 		ComputeUnitLimit:         DefaultComputeUnitLimit,
 		LedgerLimitSize:          DefaultLedgerLimitSize,
+		ClonePrograms:            []string{},
 		CloneAccounts:            []string{},
 		CloneUpgradeablePrograms: []string{},
+		AirdropAccounts:          []AirdropEntry{},
 		ProgramDeploy:            ProgramDeployConfig{},
 	}
 }
@@ -83,11 +101,22 @@ func (c *Config) ApplyDefaults() {
 	if c.LedgerLimitSize == 0 {
 		c.LedgerLimitSize = DefaultLedgerLimitSize
 	}
+	if c.ClonePrograms == nil {
+		c.ClonePrograms = []string{}
+	}
 	if c.CloneAccounts == nil {
 		c.CloneAccounts = []string{}
 	}
 	if c.CloneUpgradeablePrograms == nil {
 		c.CloneUpgradeablePrograms = []string{}
+	}
+	if c.AirdropAccounts == nil {
+		c.AirdropAccounts = []AirdropEntry{}
+	}
+	for i, entry := range c.AirdropAccounts {
+		if entry.Amount == 0 {
+			c.AirdropAccounts[i].Amount = DefaultAirdropAmount
+		}
 	}
 }
 
@@ -108,10 +137,16 @@ func (c Config) Validate() error {
 	if c.LedgerLimitSize < minLedgerLimitSize {
 		return fmt.Errorf("ledger_limit_size must be >= %d", minLedgerLimitSize)
 	}
+	if err := validateAddressList("clone_programs", c.ClonePrograms); err != nil {
+		return err
+	}
 	if err := validateAddressList("clone_accounts", c.CloneAccounts); err != nil {
 		return err
 	}
 	if err := validateAddressList("clone_upgradeable_programs", c.CloneUpgradeablePrograms); err != nil {
+		return err
+	}
+	if err := validateAirdropAccounts(c.AirdropAccounts); err != nil {
 		return err
 	}
 	if err := validateProgramDeploy(c.ProgramDeploy); err != nil {
@@ -134,6 +169,27 @@ func validateAddressList(key string, values []string) error {
 			return fmt.Errorf("%s contains duplicate address %q", key, value)
 		}
 		seen[value] = struct{}{}
+	}
+	return nil
+}
+
+func validateAirdropAccounts(entries []AirdropEntry) error {
+	seen := map[string]struct{}{}
+	for _, entry := range entries {
+		addr := strings.TrimSpace(entry.Address)
+		if addr == "" {
+			return errors.New("airdrop_accounts contains an entry with an empty address")
+		}
+		if !base58AddressPattern.MatchString(addr) {
+			return fmt.Errorf("airdrop_accounts contains invalid address %q", addr)
+		}
+		if _, ok := seen[addr]; ok {
+			return fmt.Errorf("airdrop_accounts contains duplicate address %q", addr)
+		}
+		seen[addr] = struct{}{}
+		if entry.Amount == 0 {
+			return fmt.Errorf("airdrop_accounts entry for %q has amount 0; use a positive value or omit to use the default (%d)", addr, DefaultAirdropAmount)
+		}
 	}
 	return nil
 }

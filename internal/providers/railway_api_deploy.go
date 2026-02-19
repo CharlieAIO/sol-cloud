@@ -8,10 +8,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
-	"os/exec"
-	"strings"
 )
 
 type railwayGraphQLResponse struct {
@@ -540,6 +541,23 @@ func createRailwayProjectToken(ctx context.Context, client *http.Client, graphql
 	return projectToken, nil
 }
 
+// tryLoadSavedRailwayIDs loads project/service IDs written by a previous successful deploy.
+// Returns nil if the file is absent or incomplete.
+func tryLoadSavedRailwayIDs(artifactsDir string) *railwayDeploymentIDs {
+	data, err := os.ReadFile(filepath.Join(artifactsDir, "railway-ids.json"))
+	if err != nil {
+		return nil
+	}
+	var ids railwayDeploymentIDs
+	if err := json.Unmarshal(data, &ids); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(ids.ProjectID) == "" || strings.TrimSpace(ids.ServiceID) == "" {
+		return nil
+	}
+	return &ids
+}
+
 func deployViaRailwayCLI(ctx context.Context, token string, cfg *Config, artifactsDir string) (logs, domain, projectID, serviceID string, err error) {
 	if err := ensureRailwayInstalled(); err != nil {
 		return "", "", "", "", err
@@ -557,17 +575,26 @@ func deployViaRailwayCLI(ctx context.Context, token string, cfg *Config, artifac
 		savedWorkspaceID = creds.Railway.WorkspaceID
 	}
 
-	projectID, err = ensureRailwayProject(ctx, client, graphqlURL, token, cfg.Name, cfg.OrgSlug, savedWorkspaceID)
-	if err != nil {
-		return logBuilder.String(), "", "", "", err
-	}
-	logBuilder.WriteString(fmt.Sprintf("project ensured: %s\n", projectID))
+	// If a previous successful deploy wrote railway-ids.json, reuse those IDs to avoid
+	// accidentally creating a duplicate project (e.g. when the project lives in a team
+	// workspace that the generic projects query doesn't always return).
+	if saved := tryLoadSavedRailwayIDs(artifactsDir); saved != nil {
+		projectID = saved.ProjectID
+		serviceID = saved.ServiceID
+		logBuilder.WriteString(fmt.Sprintf("found existing deployment: project=%s service=%s (redeploying)\n", projectID, serviceID))
+	} else {
+		projectID, err = ensureRailwayProject(ctx, client, graphqlURL, token, cfg.Name, cfg.OrgSlug, savedWorkspaceID)
+		if err != nil {
+			return logBuilder.String(), "", "", "", err
+		}
+		logBuilder.WriteString(fmt.Sprintf("project ensured: %s\n", projectID))
 
-	serviceID, err = ensureRailwayService(ctx, client, graphqlURL, token, projectID, "validator")
-	if err != nil {
-		return logBuilder.String(), "", "", "", err
+		serviceID, err = ensureRailwayService(ctx, client, graphqlURL, token, projectID, "validator")
+		if err != nil {
+			return logBuilder.String(), "", "", "", err
+		}
+		logBuilder.WriteString(fmt.Sprintf("service ensured: %s\n", serviceID))
 	}
-	logBuilder.WriteString(fmt.Sprintf("service ensured: %s\n", serviceID))
 
 	// Resolve environment then set up everything scoped to it.
 	environmentID := ""
