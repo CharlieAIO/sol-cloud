@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	defaultHealthCheck    = 3 * time.Minute
+	defaultHealthCheck    = 10 * time.Minute
 	defaultPollInterval   = 5 * time.Second
 	defaultFlyMachinesAPI = "https://api.machines.dev/v1"
 	defaultFlyGraphQLURL  = "https://api.fly.io/graphql"
@@ -93,6 +93,7 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 			TicksPerSlot:             cfg.Validator.TicksPerSlot,
 			ComputeUnitLimit:         cfg.Validator.ComputeUnitLimit,
 			LedgerLimitSize:          cfg.Validator.LedgerLimitSize,
+			CloneRPCURL:              cfg.Validator.CloneRPCURL,
 			ClonePrograms:            append([]string(nil), cfg.Validator.ClonePrograms...),
 			CloneAccounts:            append([]string(nil), cfg.Validator.CloneAccounts...),
 			CloneUpgradeablePrograms: append([]string(nil), cfg.Validator.CloneUpgradeablePrograms...),

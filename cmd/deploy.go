@@ -37,6 +37,7 @@ var (
 	deployVolumeSize         int
 	deploySkipVolume         bool
 	deployForceReset         bool
+	deployCloneRPCURL        string
 )
 
 var deployCmd = &cobra.Command{
@@ -100,6 +101,7 @@ var deployCmd = &cobra.Command{
 			TicksPerSlot:             viper.GetUint64("validator.ticks_per_slot"),
 			ComputeUnitLimit:         viper.GetUint64("validator.compute_unit_limit"),
 			LedgerLimitSize:          viper.GetUint64("validator.ledger_limit_size"),
+			CloneRPCURL:              viper.GetString("validator.clone_rpc_url"),
 			ClonePrograms:            viper.GetStringSlice("validator.clone_programs"),
 			CloneAccounts:            viper.GetStringSlice("validator.clone_accounts"),
 			CloneUpgradeablePrograms: viper.GetStringSlice("validator.clone_upgradeable_programs"),
@@ -158,6 +160,9 @@ var deployCmd = &cobra.Command{
 		}
 		if deployForceReset {
 			validatorCfg.ForceReset = true
+		}
+		if cmd.Flags().Changed("clone-rpc-url") {
+			validatorCfg.CloneRPCURL = deployCloneRPCURL
 		}
 		if err := validatorCfg.Validate(); err != nil {
 			return fmt.Errorf("invalid validator config: %w", err)
@@ -295,6 +300,7 @@ func init() {
 	deployCmd.Flags().BoolVar(&deploySkipVolume, "skip-volume", false, "skip volume creation, use ephemeral storage (data loss on restart)")
 	deployCmd.Flags().BoolVarP(&deployForceReset, "reset", "r", false, "wipe the existing ledger on startup so --clone and other args take effect")
 	deployCmd.Flags().StringArrayVar(&deployAirdropRaw, "airdrop", nil, `airdrop SOL on startup; format: ADDRESS or ADDRESS:AMOUNT (default amount: 1000); repeatable`)
+	deployCmd.Flags().StringVar(&deployCloneRPCURL, "clone-rpc-url", "", "RPC endpoint for --clone fetches (default: mainnet-beta; use a private endpoint if rate-limited)")
 }
 
 func firstNonEmpty(values ...string) string {

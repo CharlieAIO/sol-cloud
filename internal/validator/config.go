@@ -12,6 +12,7 @@ const (
 	DefaultTicksPerSlot     uint64 = 64
 	DefaultComputeUnitLimit uint64 = 200000
 	DefaultLedgerLimitSize  uint64 = 10000
+	DefaultCloneRPCURL             = "https://api.mainnet-beta.solana.com"
 
 	minSlotsPerEpoch    uint64 = 32
 	maxTicksPerSlot     uint64 = 1024
@@ -45,6 +46,10 @@ type Config struct {
 	// Deprecated: use ClonePrograms. Kept for backwards compatibility.
 	CloneUpgradeablePrograms []string       `mapstructure:"clone_upgradeable_programs" yaml:"clone_upgradeable_programs"`
 	AirdropAccounts          []AirdropEntry `mapstructure:"airdrop_accounts" yaml:"airdrop_accounts"`
+	// CloneRPCURL is the RPC endpoint used for --clone and --clone-upgradeable-program
+	// fetches at startup. Defaults to mainnet-beta. Use a private endpoint (Helius,
+	// QuickNode, etc.) if the public endpoint is rate-limited or unreliable.
+	CloneRPCURL string `mapstructure:"clone_rpc_url" yaml:"clone_rpc_url"`
 	// ForceReset clears the ledger on startup so --clone and other args take effect
 	// even when a persistent ledger already exists on disk.
 	ForceReset    bool                `mapstructure:"force_reset" yaml:"force_reset"`
@@ -79,6 +84,7 @@ func DefaultConfig() Config {
 		TicksPerSlot:             DefaultTicksPerSlot,
 		ComputeUnitLimit:         DefaultComputeUnitLimit,
 		LedgerLimitSize:          DefaultLedgerLimitSize,
+		CloneRPCURL:              DefaultCloneRPCURL,
 		ClonePrograms:            []string{},
 		CloneAccounts:            []string{},
 		CloneUpgradeablePrograms: []string{},
@@ -103,6 +109,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.LedgerLimitSize == 0 {
 		c.LedgerLimitSize = DefaultLedgerLimitSize
+	}
+	if strings.TrimSpace(c.CloneRPCURL) == "" {
+		c.CloneRPCURL = DefaultCloneRPCURL
 	}
 	if c.ClonePrograms == nil {
 		c.ClonePrograms = []string{}

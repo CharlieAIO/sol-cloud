@@ -63,6 +63,7 @@ type validatorTemplateData struct {
 	TicksPerSlot     uint64
 	ComputeUnitLimit uint64
 	LedgerLimitSize  uint64
+	CloneRPCURL      string
 	// ClonePrograms is the unified list; the entrypoint auto-detects upgradeable vs plain.
 	ClonePrograms []string
 	// Legacy fields kept for backwards compatibility.
