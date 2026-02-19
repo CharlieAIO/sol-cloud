@@ -1,6 +1,6 @@
 FROM ubuntu:22.04
 
-RUN apt-get update && apt-get install -y wget ca-certificates bash nginx bzip2 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y wget curl ca-certificates bash nginx bzip2 && rm -rf /var/lib/apt/lists/*
 
 # Install Solana CLI for x86_64 (Fly runs linux/amd64 for this project).
 ENV SOLANA_VERSION=1.18.26

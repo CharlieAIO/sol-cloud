@@ -188,13 +188,9 @@ var initCmd = &cobra.Command{
 		}
 		cfg.ClonePrograms = clonePrograms
 
-		airdropRaw, err := utils.StringList(reader, out, "Startup airdrop recipients (optional, format: ADDRESS or ADDRESS:AMOUNT)", "Airdrop recipient")
+		airdropEntries, err := promptAirdropAccounts(reader, out)
 		if err != nil {
 			return err
-		}
-		airdropEntries, err := parseAirdropFlags(airdropRaw)
-		if err != nil {
-			return fmt.Errorf("invalid airdrop entry: %w", err)
 		}
 		cfg.AirdropAccounts = airdropEntries
 
@@ -322,6 +318,28 @@ func promptRailwayRegion(in io.Reader, reader *bufio.Reader, out io.Writer, defa
 		return "", promptErr
 	}
 	return strings.ToLower(strings.TrimSpace(custom)), nil
+}
+
+func promptAirdropAccounts(reader *bufio.Reader, out io.Writer) ([]validator.AirdropEntry, error) {
+	fmt.Fprintln(out, "Airdrop accounts (optional)")
+	fmt.Fprintln(out, "Press Enter on an empty address to finish.")
+
+	var entries []validator.AirdropEntry
+	for {
+		address, err := utils.String(reader, out, fmt.Sprintf("Airdrop address #%d", len(entries)+1), "", false)
+		if err != nil {
+			return nil, err
+		}
+		address = strings.TrimSpace(address)
+		if address == "" {
+			return entries, nil
+		}
+		amount, err := utils.Uint64(reader, out, fmt.Sprintf("  Amount (SOL) for %s", address), validator.DefaultAirdropAmount, true)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, validator.AirdropEntry{Address: address, Amount: amount})
+	}
 }
 
 func renderYAMLStringList(values []string, indent string) string {
