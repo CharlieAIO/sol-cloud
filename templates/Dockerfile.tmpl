@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y wget curl ca-certificates bash nginx bzip2 && rm -rf /var/lib/apt/lists/*
 
 # Install Agave CLI for x86_64 (Fly runs linux/amd64 for this project).
-ENV SOLANA_VERSION=3.1.8
+ENV SOLANA_VERSION=2.3.13
 ENV PATH="/usr/local/bin:$PATH"
 RUN wget -q https://github.com/anza-xyz/agave/releases/download/v${SOLANA_VERSION}/solana-release-x86_64-unknown-linux-gnu.tar.bz2 && \
     tar -xjf solana-release-x86_64-unknown-linux-gnu.tar.bz2 && \
