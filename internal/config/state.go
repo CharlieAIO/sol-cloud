@@ -28,6 +28,7 @@ type DeploymentRecord struct {
 	WebSocketURL string    `json:"websocket_url"`
 	Region       string    `json:"region"`
 	ArtifactsDir string    `json:"artifacts_dir"`
+	DashboardURL string    `json:"dashboard_url,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

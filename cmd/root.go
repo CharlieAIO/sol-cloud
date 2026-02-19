@@ -16,8 +16,8 @@ var version = "dev"
 
 var rootCmd = &cobra.Command{
 	Use:          "sol-cloud",
-	Short:        "Deploy Solana validators to Fly.io",
-	Long:         "sol-cloud deploys and manages Solana validator environments on Fly.io.",
+	Short:        "Deploy Solana validators to Fly.io or Railway",
+	Long:         "sol-cloud deploys and manages Solana validator environments on Fly.io or Railway.",
 	Version:      version,
 	SilenceUsage: true,
 	CompletionOptions: cobra.CompletionOptions{

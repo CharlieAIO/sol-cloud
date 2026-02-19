@@ -15,6 +15,18 @@ import (
 
 var initForce bool
 
+var providerOptions = []utils.Option{
+	{Key: "fly", Label: "Fly.io"},
+	{Key: "railway", Label: "Railway"},
+}
+
+var railwayRegionOptions = []utils.Option{
+	{Key: "us-west", Label: "US West"},
+	{Key: "us-east", Label: "US East"},
+	{Key: "eu-west", Label: "EU West"},
+	{Key: "asia-southeast", Label: "Asia Southeast"},
+}
+
 var flyRegionOptions = []utils.Option{
 	{Key: "ord", Label: "Chicago"},
 	{Key: "iad", Label: "Ashburn"},
@@ -72,15 +84,40 @@ var initCmd = &cobra.Command{
 		fmt.Fprintln(out, "Press Enter to accept defaults.")
 		fmt.Fprintln(out)
 
-		appName, err := utils.GenerateFlyAppName()
+		providerName, err := utils.SelectOptionArrow(cmd.InOrStdin(), out, "Provider", providerOptions, "fly")
 		if err != nil {
-			return err
+			// Fall back to prompt if terminal is not interactive.
+			providerName, err = utils.String(reader, out, "Provider (fly or railway)", "fly", true)
+			if err != nil {
+				return err
+			}
+			providerName = strings.ToLower(strings.TrimSpace(providerName))
 		}
-		fmt.Fprintf(out, "Fly app name: %s\n", appName)
 
-		region, err := promptFlyRegion(cmd.InOrStdin(), reader, out, "ord")
-		if err != nil {
-			return err
+		var appName string
+		var region string
+		switch providerName {
+		case "railway":
+			appName, err = utils.GenerateRailwayProjectName()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Railway project name: %s\n", appName)
+			region, err = promptRailwayRegion(cmd.InOrStdin(), reader, out, "us-west")
+			if err != nil {
+				return err
+			}
+		default:
+			providerName = "fly"
+			appName, err = utils.GenerateFlyAppName()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Fly app name: %s\n", appName)
+			region, err = promptFlyRegion(cmd.InOrStdin(), reader, out, "ord")
+			if err != nil {
+				return err
+			}
 		}
 
 		cfg := validator.DefaultConfig()
@@ -156,7 +193,7 @@ var initCmd = &cobra.Command{
 		escapedProgramIDKeypair := strings.ReplaceAll(cfg.ProgramDeploy.ProgramIDKeypairPath, `"`, `\"`)
 		escapedUpgradeAuth := strings.ReplaceAll(cfg.ProgramDeploy.UpgradeAuthorityPath, `"`, `\"`)
 
-		starter := fmt.Sprintf(`provider: fly
+		starter := fmt.Sprintf(`provider: %s
 app_name: "%s"
 region: "%s"
 validator:
@@ -172,7 +209,7 @@ validator:
     so_path: "%s"
     program_id_keypair: "%s"
     upgrade_authority: "%s"
-`, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneAccountsYAML, cloneProgramsYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
+`, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneAccountsYAML, cloneProgramsYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
 
 		if err := os.WriteFile(file, []byte(starter), 0o644); err != nil {
 			return fmt.Errorf("write config: %w", err)
@@ -208,6 +245,31 @@ func promptFlyRegion(in io.Reader, reader *bufio.Reader, out io.Writer, defaultR
 	}
 
 	custom, promptErr := utils.String(reader, out, "Fly region code", defaultRegion, true)
+	if promptErr != nil {
+		return "", promptErr
+	}
+	return strings.ToLower(strings.TrimSpace(custom)), nil
+}
+
+func promptRailwayRegion(in io.Reader, reader *bufio.Reader, out io.Writer, defaultRegion string) (string, error) {
+	defaultRegion = strings.ToLower(strings.TrimSpace(defaultRegion))
+	if defaultRegion == "" {
+		defaultRegion = "us-west"
+	}
+
+	region, err := utils.SelectOptionArrow(in, out, "Railway region", railwayRegionOptions, defaultRegion)
+	if err == nil {
+		return region, nil
+	}
+	if errors.Is(err, utils.ErrManualSelection) {
+		custom, promptErr := utils.String(reader, out, "Custom Railway region code", defaultRegion, true)
+		if promptErr != nil {
+			return "", promptErr
+		}
+		return strings.ToLower(strings.TrimSpace(custom)), nil
+	}
+
+	custom, promptErr := utils.String(reader, out, "Railway region code", defaultRegion, true)
 	if promptErr != nil {
 		return "", promptErr
 	}

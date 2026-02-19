@@ -52,24 +52,23 @@ var statusCmd = &cobra.Command{
 		if strings.TrimSpace(record.Provider) == "" {
 			record.Provider = "fly"
 		}
-		if record.Provider != "fly" {
-			return fmt.Errorf("unsupported provider %q: only fly is enabled", record.Provider)
-		}
-		if strings.TrimSpace(record.RPCURL) == "" {
-			record.RPCURL = fmt.Sprintf("https://%s.fly.dev", record.Name)
-		}
-		if strings.TrimSpace(record.WebSocketURL) == "" {
-			record.WebSocketURL = fmt.Sprintf("wss://%s.fly.dev", record.Name)
-		}
 
 		providerState := "unknown"
 		providerErrText := ""
-		provider := providers.NewFlyProvider()
-		providerStatus, err := provider.Status(cmd.Context(), record.Name)
-		if err == nil {
+		provider, providerErr := providers.NewProvider(record.Provider)
+		if providerErr != nil {
+			providerErrText = providerErr.Error()
+		}
+		var providerStatus *providers.Status
+		if provider != nil {
+			var statusErr error
+			providerStatus, statusErr = provider.Status(cmd.Context(), record.Name)
+			if statusErr != nil {
+				providerErrText = statusErr.Error()
+			}
+		}
+		if providerStatus != nil {
 			providerState = providerStatus.State
-		} else {
-			providerErrText = err.Error()
 		}
 
 		slot, tps, healthText := "n/a", "n/a", "unreachable"
@@ -100,6 +99,9 @@ var statusCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "TPS:       %s\n", tps)
 		fmt.Fprintf(cmd.OutOrStdout(), "RPC:       %s\n", record.RPCURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "WebSocket: %s\n", record.WebSocketURL)
+		if record.DashboardURL != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "Dashboard: %s\n", record.DashboardURL)
+		}
 		if providerErrText != "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "Provider check warning: %s\n", providerErrText)
 		}
@@ -135,6 +137,7 @@ func resolveStatusRecord(state *appconfig.State, name string) (appconfig.Deploym
 	}
 
 	// Allow querying an app by explicit name even if it is not in local state.
+	// Default to fly provider for backward compatibility.
 	return appconfig.DeploymentRecord{
 		Name:         name,
 		Provider:     "fly",

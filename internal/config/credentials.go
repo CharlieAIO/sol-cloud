@@ -15,7 +15,14 @@ const (
 )
 
 type Credentials struct {
-	Fly FlyCredentials `json:"fly"`
+	Fly     FlyCredentials     `json:"fly"`
+	Railway RailwayCredentials `json:"railway"`
+}
+
+type RailwayCredentials struct {
+	AccessToken string    `json:"access_token"`
+	WorkspaceID string    `json:"workspace_id,omitempty"`
+	VerifiedAt  time.Time `json:"verified_at,omitempty"`
 }
 
 type FlyCredentials struct {
@@ -70,6 +77,8 @@ func LoadCredentials() (*Credentials, error) {
 	}
 	creds.Fly.AccessToken = strings.TrimSpace(creds.Fly.AccessToken)
 	creds.Fly.OrgSlug = strings.TrimSpace(creds.Fly.OrgSlug)
+	creds.Railway.AccessToken = strings.TrimSpace(creds.Railway.AccessToken)
+	creds.Railway.WorkspaceID = strings.TrimSpace(creds.Railway.WorkspaceID)
 	return &creds, nil
 }
 
@@ -79,6 +88,8 @@ func SaveCredentials(creds *Credentials) error {
 	}
 	creds.Fly.AccessToken = strings.TrimSpace(creds.Fly.AccessToken)
 	creds.Fly.OrgSlug = strings.TrimSpace(creds.Fly.OrgSlug)
+	creds.Railway.AccessToken = strings.TrimSpace(creds.Railway.AccessToken)
+	creds.Railway.WorkspaceID = strings.TrimSpace(creds.Railway.WorkspaceID)
 
 	path, err := CredentialsFilePath()
 	if err != nil {

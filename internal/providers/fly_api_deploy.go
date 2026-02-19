@@ -92,6 +92,20 @@ type flyMachineGuest struct {
 	MemoryMB int    `json:"memory_mb,omitempty"`
 }
 
+type flyVolume struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Region string `json:"region"`
+}
+
+type flyVolumeCreateRequest struct {
+	Name              string `json:"name"`
+	Region            string `json:"region"`
+	SizeGb            int    `json:"size_gb,omitempty"`
+	RequireUniqueZone bool   `json:"require_unique_zone,omitempty"`
+}
+
 func (p *FlyProvider) deployViaAPI(
 	ctx context.Context,
 	token string,
@@ -121,11 +135,23 @@ func (p *FlyProvider) deployViaAPI(
 	}
 	logs.WriteString("networking ensured\n")
 
+	if !cfg.SkipVolume {
+		volume, err := p.ensureVolume(ctx, token, cfg.Name, cfg.Region, cfg.VolumeSize)
+		if err != nil {
+			logs.WriteString(fmt.Sprintf("volume creation warning: %s\n", err.Error()))
+			logs.WriteString("continuing with ephemeral storage (data will not persist across restarts)\n")
+		} else {
+			logs.WriteString(fmt.Sprintf("volume ensured: %s (%dGB)\n", volume.Name, cfg.VolumeSize))
+		}
+	} else {
+		logs.WriteString("volume creation skipped (using ephemeral storage)\n")
+	}
+
 	env := append(os.Environ(), "FLY_ACCESS_TOKEN="+token)
 	if strings.TrimSpace(orgSlug) != "" {
 		env = append(env, "FLY_ORG="+orgSlug)
 	}
-	deployOutput, err := p.runCommandWithEnv(
+	deployOutput, err := runCommandWithEnv(
 		ctx,
 		artifactsDir,
 		"",
@@ -242,7 +268,7 @@ func (p *FlyProvider) dockerLogin(ctx context.Context, token string) error {
 	if !strings.HasSuffix(input, "\n") {
 		input += "\n"
 	}
-	output, err := p.runCommand(ctx, "", input, "docker", "login", flyRegistryHost, "-u", "x", "--password-stdin")
+	output, err := runCommand(ctx, "", input, "docker", "login", flyRegistryHost, "-u", "x", "--password-stdin")
 	if err != nil {
 		return fmt.Errorf("docker login failed: %w\n%s", err, strings.TrimSpace(output))
 	}
@@ -449,40 +475,63 @@ func (p *FlyProvider) graphQLRequest(ctx context.Context, token, query string, v
 	return &decoded, nil
 }
 
-func (p *FlyProvider) runCommand(ctx context.Context, dir, stdin, name string, args ...string) (string, error) {
-	return p.runCommandWithEnv(ctx, dir, stdin, nil, name, args...)
+func (p *FlyProvider) ensureVolume(ctx context.Context, token, appName, region string, sizeGB int) (*flyVolume, error) {
+	volumeName := fmt.Sprintf("%s_ledger", appName)
+
+	// Check if volume already exists
+	volumes, err := p.listVolumes(ctx, token, appName)
+	if err != nil {
+		return nil, fmt.Errorf("list volumes: %w", err)
+	}
+
+	for _, vol := range volumes {
+		if vol.Name == volumeName {
+			return &vol, nil
+		}
+	}
+
+	// Create new volume
+	return p.createVolume(ctx, token, appName, volumeName, region, sizeGB)
 }
 
-func (p *FlyProvider) runCommandWithEnv(ctx context.Context, dir, stdin string, env []string, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	if strings.TrimSpace(dir) != "" {
-		cmd.Dir = dir
+func (p *FlyProvider) listVolumes(ctx context.Context, token, appName string) ([]flyVolume, error) {
+	status, body, err := p.doMachinesRequest(ctx, token, http.MethodGet, fmt.Sprintf("/apps/%s/volumes", appName), nil)
+	if err != nil {
+		return nil, err
 	}
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
+	if status == http.StatusNotFound {
+		return nil, nil
 	}
-	if len(env) > 0 {
-		cmd.Env = env
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("list volumes failed (%d): %s", status, strings.TrimSpace(string(body)))
 	}
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+
+	var volumes []flyVolume
+	if err := json.Unmarshal(body, &volumes); err != nil {
+		return nil, fmt.Errorf("decode volumes response: %w", err)
+	}
+	return volumes, nil
 }
 
-func commandStageError(stage string, err error, output string) error {
-	output = strings.TrimSpace(output)
-	if output == "" {
-		return fmt.Errorf("%s failed: %w", stage, err)
+func (p *FlyProvider) createVolume(ctx context.Context, token, appName, volumeName, region string, sizeGB int) (*flyVolume, error) {
+	req := flyVolumeCreateRequest{
+		Name:              volumeName,
+		Region:            region,
+		SizeGb:            sizeGB,
+		RequireUniqueZone: false,
 	}
-	return fmt.Errorf("%s failed: %w\n%s", stage, err, lastNLines(output, 40))
-}
 
-func lastNLines(text string, n int) string {
-	if n <= 0 {
-		return ""
+	status, body, err := p.doMachinesRequest(ctx, token, http.MethodPost, fmt.Sprintf("/apps/%s/volumes", appName), req)
+	if err != nil {
+		return nil, err
 	}
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	if len(lines) <= n {
-		return text
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("create volume failed (%d): %s", status, strings.TrimSpace(string(body)))
 	}
-	return strings.Join(lines[len(lines)-n:], "\n")
+
+	var volume flyVolume
+	if err := json.Unmarshal(body, &volume); err != nil {
+		return nil, fmt.Errorf("decode volume response: %w", err)
+	}
+	return &volume, nil
 }

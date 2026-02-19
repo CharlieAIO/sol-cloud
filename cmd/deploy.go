@@ -31,12 +31,14 @@ var (
 	deployProgramIDKeypair   string
 	deployProgramIDLegacy    string
 	deployUpgradeAuthority   string
+	deployVolumeSize         int
+	deploySkipVolume         bool
 )
 
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
-	Short: "Deploy a validator to Fly.io",
-	Long:  "Render deployment artifacts and deploy a Solana validator to Fly.io using app_name from .sol-cloud.yml.",
+	Short: "Deploy a Solana validator",
+	Long:  "Render deployment artifacts and deploy a Solana validator using app_name from .sol-cloud.yml.",
 	Example: `  sol-cloud deploy
   sol-cloud deploy --dry-run
   sol-cloud deploy --region ord --health-timeout 4m
@@ -48,17 +50,25 @@ var deployCmd = &cobra.Command{
 		if providerName == "" {
 			providerName = "fly"
 		}
-		if providerName != "fly" {
-			return fmt.Errorf("unsupported provider %q: only fly is enabled", providerName)
-		}
 
 		name := strings.TrimSpace(viper.GetString("app_name"))
 		if name == "" {
 			return fmt.Errorf("app_name is required in .sol-cloud.yml; run `sol-cloud init` first")
 		}
-		name, err := utils.EnsureFlyAppName(name)
-		if err != nil {
-			return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
+		var err error
+		switch providerName {
+		case "fly":
+			name, err = utils.EnsureFlyAppName(name)
+			if err != nil {
+				return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
+			}
+		case "railway":
+			name, err = utils.EnsureRailwayProjectName(name)
+			if err != nil {
+				return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
+			}
+		default:
+			return fmt.Errorf("unsupported provider %q: valid providers are fly, railway", providerName)
 		}
 
 		region := strings.TrimSpace(deployRegion)
@@ -66,7 +76,11 @@ var deployCmd = &cobra.Command{
 			region = strings.TrimSpace(viper.GetString("region"))
 		}
 		if region == "" {
-			region = "ord"
+			if providerName == "railway" {
+				region = "us-west"
+			} else {
+				region = "ord"
+			}
 		}
 
 		projectDir, err := os.Getwd()
@@ -126,6 +140,11 @@ var deployCmd = &cobra.Command{
 			return fmt.Errorf("invalid validator config: %w", err)
 		}
 
+		volumeSize := deployVolumeSize
+		if volumeSize <= 0 {
+			volumeSize = 10
+		}
+
 		cfg := &providers.Config{
 			Name:                name,
 			OrgSlug:             firstNonEmpty(strings.TrimSpace(deployOrg), strings.TrimSpace(viper.GetString("org"))),
@@ -136,13 +155,18 @@ var deployCmd = &cobra.Command{
 			SkipHealthCheck:     deploySkipHealthCheck,
 			HealthCheckTimeout:  deployHealthCheckTimeout,
 			HealthCheckInterval: deployHealthCheckPoll,
+			VolumeSize:          volumeSize,
+			SkipVolume:          deploySkipVolume,
 		}
 
-		flyProvider := providers.NewFlyProvider()
-		if !deployDryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "🚀 Deploying validator to Fly.io...")
+		provider, err := providers.NewProvider(providerName)
+		if err != nil {
+			return err
 		}
-		deployment, err := flyProvider.Deploy(cmd.Context(), cfg)
+		if !deployDryRun {
+			fmt.Fprintf(cmd.OutOrStdout(), "🚀 Deploying validator via %s...\n", providerName)
+		}
+		deployment, err := provider.Deploy(cmd.Context(), cfg)
 		if err != nil {
 			return err
 		}
@@ -175,8 +199,9 @@ var deployCmd = &cobra.Command{
 		fmt.Fprintln(cmd.OutOrStdout(), "🎉 Your Solana RPC + WebSocket endpoints are ready to use:")
 		fmt.Fprintf(cmd.OutOrStdout(), "📡 Solana RPC: %s\n", deployment.RPCURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "🔌 Solana WS:  %s\n", deployment.WebSocketURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "🌐 Fly app:    https://fly.io/apps/%s\n", deployment.Name)
-		fmt.Fprintf(cmd.OutOrStdout(), "📊 Monitor:    https://fly.io/apps/%s/monitoring\n", deployment.Name)
+		if deployment.DashboardURL != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "🌐 Dashboard:  %s\n", deployment.DashboardURL)
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "🧩 App:        %s\n", deployment.Name)
 		fmt.Fprintf(cmd.OutOrStdout(), "📁 Artifacts:  %s\n", deployment.ArtifactsDir)
 		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone=%d clone_upgradeable_program=%d\n",
@@ -206,6 +231,7 @@ var deployCmd = &cobra.Command{
 			WebSocketURL: deployment.WebSocketURL,
 			Region:       region,
 			ArtifactsDir: deployment.ArtifactsDir,
+			DashboardURL: deployment.DashboardURL,
 		}); err != nil {
 			return fmt.Errorf("update local deployment state: %w", err)
 		}
@@ -223,7 +249,7 @@ func init() {
 	rootCmd.AddCommand(deployCmd)
 
 	deployCmd.Flags().StringVar(&deployRegion, "region", "", "Fly region (overrides region in config)")
-	deployCmd.Flags().StringVar(&deployOrg, "org", "", "Fly org slug (overrides org in config/credentials)")
+	deployCmd.Flags().StringVar(&deployOrg, "org", "", "Org/team identifier (fly: org slug; railway: team id)")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "render files but skip API deployment")
 	deployCmd.Flags().BoolVar(&deploySkipHealthCheck, "skip-health-check", false, "skip post-deploy RPC health validation")
 	deployCmd.Flags().DurationVar(&deployHealthCheckTimeout, "health-timeout", 3*time.Minute, "maximum wait for RPC health")
@@ -239,6 +265,8 @@ func init() {
 	deployCmd.Flags().StringVar(&deployProgramIDLegacy, "program-id", "", "deprecated alias for --program-id-keypair")
 	_ = deployCmd.Flags().MarkDeprecated("program-id", "use --program-id-keypair with a keypair path")
 	deployCmd.Flags().StringVar(&deployUpgradeAuthority, "upgrade-authority", "", "path to upgrade authority keypair (overrides validator.program_deploy.upgrade_authority)")
+	deployCmd.Flags().IntVar(&deployVolumeSize, "volume-size", 10, "size of persistent ledger volume in GB")
+	deployCmd.Flags().BoolVar(&deploySkipVolume, "skip-volume", false, "skip volume creation, use ephemeral storage (data loss on restart)")
 }
 
 func firstNonEmpty(values ...string) string {

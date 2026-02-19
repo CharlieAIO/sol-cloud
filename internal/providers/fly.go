@@ -12,11 +12,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"text/template"
 	"time"
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
-	tmplassets "github.com/CharlieAIO/sol-cloud/templates"
 )
 
 const (
@@ -47,26 +45,10 @@ func NewFlyProvider() *FlyProvider {
 }
 
 type flyTemplateData struct {
-	Name      string
-	Region    string
-	Validator flyValidatorTemplateData
-}
-
-type flyValidatorTemplateData struct {
-	SlotsPerEpoch            uint64
-	TicksPerSlot             uint64
-	ComputeUnitLimit         uint64
-	LedgerLimitSize          uint64
-	CloneAccounts            []string
-	CloneUpgradeablePrograms []string
-	ProgramDeploy            flyProgramDeployTemplateData
-}
-
-type flyProgramDeployTemplateData struct {
-	Enabled              bool
-	SOPath               string
-	ProgramIDKeypairPath string
-	UpgradeAuthorityPath string
+	Name       string
+	Region     string
+	SkipVolume bool
+	Validator  validatorTemplateData
 }
 
 func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, error) {
@@ -103,9 +85,10 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 	}
 
 	data := flyTemplateData{
-		Name:   cfg.Name,
-		Region: cfg.Region,
-		Validator: flyValidatorTemplateData{
+		Name:       cfg.Name,
+		Region:     cfg.Region,
+		SkipVolume: cfg.SkipVolume,
+		Validator: validatorTemplateData{
 			SlotsPerEpoch:            cfg.Validator.SlotsPerEpoch,
 			TicksPerSlot:             cfg.Validator.TicksPerSlot,
 			ComputeUnitLimit:         cfg.Validator.ComputeUnitLimit,
@@ -137,6 +120,7 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		WebSocketURL: fmt.Sprintf("wss://%s.fly.dev", cfg.Name),
 		Provider:     "fly",
 		ArtifactsDir: artifactsDir,
+		DashboardURL: fmt.Sprintf("https://fly.io/apps/%s", cfg.Name),
 	}
 
 	if cfg.DryRun {
@@ -213,6 +197,52 @@ func (p *FlyProvider) Status(ctx context.Context, name string) (*Status, error) 
 	}
 
 	return p.statusViaAPI(ctx, token, name)
+}
+
+func (p *FlyProvider) Restart(ctx context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("deployment name is required")
+	}
+
+	token, err := p.resolveAccessToken()
+	if err != nil {
+		return fmt.Errorf("fly auth required: run `sol-cloud auth fly`: %w", err)
+	}
+
+	machines, err := p.listMachines(ctx, token, name)
+	if err != nil {
+		return fmt.Errorf("list machines: %w", err)
+	}
+	if len(machines) == 0 {
+		return fmt.Errorf("no machines found for app %q", name)
+	}
+
+	// Restart the first machine (validators typically have one)
+	machineID := machines[0].ID
+	if strings.TrimSpace(machineID) == "" {
+		return errors.New("machine ID is empty")
+	}
+
+	if err := p.restartMachine(ctx, token, name, machineID); err != nil {
+		return fmt.Errorf("restart machine %s: %w", machineID, err)
+	}
+
+	return nil
+}
+
+func (p *FlyProvider) restartMachine(ctx context.Context, token, appName, machineID string) error {
+	path := fmt.Sprintf("/apps/%s/machines/%s/restart", appName, machineID)
+	status, body, err := p.doMachinesRequest(ctx, token, http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	if status >= 200 && status < 300 {
+		return nil
+	}
+	if status == http.StatusNotFound {
+		return fmt.Errorf("machine %s not found", machineID)
+	}
+	return fmt.Errorf("restart machine failed (%d): %s", status, strings.TrimSpace(string(body)))
 }
 
 // VerifyAccessToken validates a Fly access token against the Machines API.
@@ -518,127 +548,6 @@ func (p *FlyProvider) httpClient() *http.Client {
 		return p.HTTPClient
 	}
 	return &http.Client{Timeout: defaultHTTPTimeout}
-}
-
-func prepareProgramDeployData(projectDir, programDir string, cfg *Config) (flyProgramDeployTemplateData, error) {
-	if cfg == nil {
-		return flyProgramDeployTemplateData{}, errors.New("config is required")
-	}
-
-	programCfg := cfg.Validator.ProgramDeploy
-	if !programCfg.HasValues() {
-		return flyProgramDeployTemplateData{}, nil
-	}
-	if !programCfg.Enabled() {
-		return flyProgramDeployTemplateData{}, errors.New("program deploy config is incomplete")
-	}
-
-	soSrc, err := resolveProjectPath(projectDir, programCfg.SOPath)
-	if err != nil {
-		return flyProgramDeployTemplateData{}, fmt.Errorf("resolve program_deploy.so_path: %w", err)
-	}
-	programIDKeypairSrc, err := resolveProjectPath(projectDir, programCfg.ProgramIDKeypairPath)
-	if err != nil {
-		return flyProgramDeployTemplateData{}, fmt.Errorf("resolve program_deploy.program_id_keypair: %w", err)
-	}
-	upgradeAuthoritySrc, err := resolveProjectPath(projectDir, programCfg.UpgradeAuthorityPath)
-	if err != nil {
-		return flyProgramDeployTemplateData{}, fmt.Errorf("resolve program_deploy.upgrade_authority: %w", err)
-	}
-
-	soDest := filepath.Join(programDir, "program.so")
-	if err := copyFile(soSrc, soDest); err != nil {
-		return flyProgramDeployTemplateData{}, fmt.Errorf("copy program binary: %w", err)
-	}
-	programIDKeypairDest := filepath.Join(programDir, "program-id-keypair.json")
-	if err := copyFile(programIDKeypairSrc, programIDKeypairDest); err != nil {
-		return flyProgramDeployTemplateData{}, fmt.Errorf("copy program id keypair: %w", err)
-	}
-	upgradeAuthorityDest := filepath.Join(programDir, "upgrade-authority.json")
-	if err := copyFile(upgradeAuthoritySrc, upgradeAuthorityDest); err != nil {
-		return flyProgramDeployTemplateData{}, fmt.Errorf("copy upgrade authority keypair: %w", err)
-	}
-
-	return flyProgramDeployTemplateData{
-		Enabled:              true,
-		SOPath:               "/opt/sol-cloud/program/program.so",
-		ProgramIDKeypairPath: "/opt/sol-cloud/program/program-id-keypair.json",
-		UpgradeAuthorityPath: "/opt/sol-cloud/program/upgrade-authority.json",
-	}, nil
-}
-
-func resolveProjectPath(projectDir, pathValue string) (string, error) {
-	pathValue = strings.TrimSpace(pathValue)
-	if pathValue == "" {
-		return "", errors.New("path is empty")
-	}
-
-	clean := pathValue
-	if !filepath.IsAbs(clean) {
-		clean = filepath.Join(projectDir, clean)
-	}
-	clean = filepath.Clean(clean)
-
-	info, err := os.Stat(clean)
-	if err != nil {
-		return "", err
-	}
-	if info.IsDir() {
-		return "", fmt.Errorf("%s is a directory", clean)
-	}
-	return clean, nil
-}
-
-func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	info, err := srcFile.Stat()
-	if err != nil {
-		return err
-	}
-	mode := info.Mode().Perm()
-	if mode == 0 {
-		mode = 0o644
-	}
-
-	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return err
-	}
-	return nil
-}
-
-func renderEmbeddedTemplateFile(name, dst string, data any) error {
-	templateName := filepath.ToSlash(name)
-	content, err := tmplassets.ReadFile(templateName)
-	if err != nil {
-		return fmt.Errorf("read embedded template %s: %w", templateName, err)
-	}
-
-	tpl, err := template.New(name).Parse(string(content))
-	if err != nil {
-		return fmt.Errorf("parse embedded template %s: %w", templateName, err)
-	}
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("create file %s: %w", dst, err)
-	}
-	defer out.Close()
-
-	if err := tpl.Execute(out, data); err != nil {
-		return fmt.Errorf("render embedded template %s: %w", templateName, err)
-	}
-	return nil
 }
 
 func extractFlyHost(output string) string {

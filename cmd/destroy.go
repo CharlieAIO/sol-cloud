@@ -41,8 +41,10 @@ var destroyCmd = &cobra.Command{
 			return fmt.Errorf("load local deployment state: %w", err)
 		}
 
+		var record appconfig.DeploymentRecord
 		if name == "" {
-			record, resolveErr := state.ResolveDeployment("")
+			var resolveErr error
+			record, resolveErr = state.ResolveDeployment("")
 			if resolveErr != nil {
 				if errors.Is(resolveErr, appconfig.ErrNoDeployments) {
 					return errors.New("no deployments found; pass --name to destroy a specific app")
@@ -50,6 +52,17 @@ var destroyCmd = &cobra.Command{
 				return resolveErr
 			}
 			name = record.Name
+		} else {
+			var resolveErr error
+			record, resolveErr = state.ResolveDeployment(name)
+			if resolveErr != nil && !errors.Is(resolveErr, appconfig.ErrDeploymentNotFound) {
+				return resolveErr
+			}
+		}
+
+		providerName := strings.TrimSpace(record.Provider)
+		if providerName == "" {
+			providerName = "fly"
 		}
 
 		if !destroyYes {
@@ -63,7 +76,10 @@ var destroyCmd = &cobra.Command{
 			}
 		}
 
-		provider := providers.NewFlyProvider()
+		provider, err := providers.NewProvider(providerName)
+		if err != nil {
+			return err
+		}
 		if err := provider.Destroy(cmd.Context(), name); err != nil {
 			return err
 		}

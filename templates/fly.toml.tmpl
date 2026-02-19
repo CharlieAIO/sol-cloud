@@ -37,3 +37,10 @@ primary_region = "{{ .Region }}"
   memory = '4gb'
   cpu_kind = 'shared'
   cpus = 4
+
+{{- if not .SkipVolume }}
+
+[[mounts]]
+  source = "{{ .Name }}_ledger"
+  destination = "/var/lib/solana/ledger"
+{{- end }}

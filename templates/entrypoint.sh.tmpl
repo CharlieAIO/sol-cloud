@@ -78,10 +78,20 @@ deploy_program_if_configured() {
     --keypair "$UPGRADE_AUTHORITY_PATH"
 }
 
+# Check if ledger directory has existing data
+LEDGER_DIR="/var/lib/solana/ledger"
+if [ -d "$LEDGER_DIR" ] && [ "$(ls -A $LEDGER_DIR 2>/dev/null)" ]; then
+  echo "Existing ledger data found, preserving state (skipping --reset)"
+  RESET_FLAG=""
+else
+  echo "No existing ledger data, starting fresh (using --reset)"
+  RESET_FLAG="--reset"
+fi
+
 args=(
   --ledger /var/lib/solana/ledger
   --bind-address 0.0.0.0
-  --reset
+  $RESET_FLAG
   --url https://api.mainnet-beta.solana.com
   --limit-ledger-size "$LEDGER_LIMIT_SIZE"
   --slots-per-epoch "$SLOTS_PER_EPOCH"
