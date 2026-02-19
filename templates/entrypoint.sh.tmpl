@@ -104,8 +104,16 @@ airdrop_configured_accounts() {
 }
 {{- end }}
 
-# Check if ledger directory has existing data
 LEDGER_DIR="/var/lib/solana/ledger"
+
+{{- if .Validator.ForceReset }}
+# --reset was passed to sol-cloud deploy; wipe the ledger so --clone and other
+# startup args are not silently ignored by solana-test-validator.
+echo "force reset: clearing existing ledger data"
+rm -rf "${LEDGER_DIR:?}"
+{{- end }}
+
+# Check if ledger directory has existing data
 if [ -d "$LEDGER_DIR" ] && [ "$(ls -A $LEDGER_DIR 2>/dev/null)" ]; then
   echo "Existing ledger data found, preserving state (skipping --reset)"
   RESET_FLAG=""

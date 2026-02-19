@@ -69,6 +69,7 @@ type validatorTemplateData struct {
 	CloneAccounts            []string
 	CloneUpgradeablePrograms []string
 	AirdropAccounts          []airdropEntryTemplateData
+	ForceReset               bool
 	ProgramDeploy            programDeployTemplateData
 }
 

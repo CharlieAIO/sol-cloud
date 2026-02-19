@@ -43,9 +43,12 @@ type Config struct {
 	// Deprecated: use ClonePrograms. Kept for backwards compatibility.
 	CloneAccounts []string `mapstructure:"clone_accounts" yaml:"clone_accounts"`
 	// Deprecated: use ClonePrograms. Kept for backwards compatibility.
-	CloneUpgradeablePrograms []string            `mapstructure:"clone_upgradeable_programs" yaml:"clone_upgradeable_programs"`
-	AirdropAccounts          []AirdropEntry      `mapstructure:"airdrop_accounts" yaml:"airdrop_accounts"`
-	ProgramDeploy            ProgramDeployConfig `mapstructure:"program_deploy" yaml:"program_deploy"`
+	CloneUpgradeablePrograms []string       `mapstructure:"clone_upgradeable_programs" yaml:"clone_upgradeable_programs"`
+	AirdropAccounts          []AirdropEntry `mapstructure:"airdrop_accounts" yaml:"airdrop_accounts"`
+	// ForceReset clears the ledger on startup so --clone and other args take effect
+	// even when a persistent ledger already exists on disk.
+	ForceReset    bool                `mapstructure:"force_reset" yaml:"force_reset"`
+	ProgramDeploy ProgramDeployConfig `mapstructure:"program_deploy" yaml:"program_deploy"`
 }
 
 // ProgramDeployConfig configures optional startup program deployment.

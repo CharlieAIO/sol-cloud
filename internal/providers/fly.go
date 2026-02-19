@@ -97,6 +97,7 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 			CloneAccounts:            append([]string(nil), cfg.Validator.CloneAccounts...),
 			CloneUpgradeablePrograms: append([]string(nil), cfg.Validator.CloneUpgradeablePrograms...),
 			AirdropAccounts:          toAirdropTemplateData(cfg.Validator.AirdropAccounts),
+			ForceReset:               cfg.Validator.ForceReset,
 			ProgramDeploy:            programDeployData,
 		},
 	}

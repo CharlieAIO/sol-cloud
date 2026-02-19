@@ -36,6 +36,7 @@ var (
 	deployUpgradeAuthority   string
 	deployVolumeSize         int
 	deploySkipVolume         bool
+	deployForceReset         bool
 )
 
 var deployCmd = &cobra.Command{
@@ -103,6 +104,7 @@ var deployCmd = &cobra.Command{
 			CloneAccounts:            viper.GetStringSlice("validator.clone_accounts"),
 			CloneUpgradeablePrograms: viper.GetStringSlice("validator.clone_upgradeable_programs"),
 			AirdropAccounts:          airdropAccounts,
+			ForceReset:               viper.GetBool("validator.force_reset"),
 			ProgramDeploy: validator.ProgramDeployConfig{
 				SOPath:               viper.GetString("validator.program_deploy.so_path"),
 				ProgramIDKeypairPath: viper.GetString("validator.program_deploy.program_id_keypair"),
@@ -153,6 +155,9 @@ var deployCmd = &cobra.Command{
 				return fmt.Errorf("invalid --airdrop flag: %w", parseErr)
 			}
 			validatorCfg.AirdropAccounts = parsed
+		}
+		if deployForceReset {
+			validatorCfg.ForceReset = true
 		}
 		if err := validatorCfg.Validate(); err != nil {
 			return fmt.Errorf("invalid validator config: %w", err)
@@ -288,6 +293,7 @@ func init() {
 	deployCmd.Flags().StringVar(&deployUpgradeAuthority, "upgrade-authority", "", "path to upgrade authority keypair (overrides validator.program_deploy.upgrade_authority)")
 	deployCmd.Flags().IntVar(&deployVolumeSize, "volume-size", 10, "size of persistent ledger volume in GB")
 	deployCmd.Flags().BoolVar(&deploySkipVolume, "skip-volume", false, "skip volume creation, use ephemeral storage (data loss on restart)")
+	deployCmd.Flags().BoolVarP(&deployForceReset, "reset", "r", false, "wipe the existing ledger on startup so --clone and other args take effect")
 	deployCmd.Flags().StringArrayVar(&deployAirdropRaw, "airdrop", nil, `airdrop SOL on startup; format: ADDRESS or ADDRESS:AMOUNT (default amount: 1000); repeatable`)
 }
 
