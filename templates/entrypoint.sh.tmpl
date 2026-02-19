@@ -107,10 +107,12 @@ airdrop_configured_accounts() {
 LEDGER_DIR="/var/lib/solana/ledger"
 
 {{- if .Validator.ForceReset }}
-# --reset was passed to sol-cloud deploy; wipe the ledger so --clone and other
-# startup args are not silently ignored by solana-test-validator.
+# --reset was passed to sol-cloud deploy; wipe the ledger contents so --clone
+# and other startup args are not silently ignored by solana-test-validator.
+# We clear the contents rather than the directory itself because the ledger
+# path is a volume mount point and cannot be removed.
 echo "force reset: clearing existing ledger data"
-rm -rf "${LEDGER_DIR:?}"
+find "${LEDGER_DIR:?}" -mindepth 1 -delete 2>/dev/null || true
 {{- end }}
 
 # Check if ledger directory has existing data
