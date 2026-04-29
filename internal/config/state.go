@@ -33,10 +33,25 @@ type DeploymentRecord struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// OperationRecord tracks command lifecycle state for long-running operations.
+type OperationRecord struct {
+	ID         string     `json:"id"`
+	Type       string     `json:"type"`
+	Deployment string     `json:"deployment"`
+	Provider   string     `json:"provider,omitempty"`
+	Status     string     `json:"status"`
+	Message    string     `json:"message,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
 // State stores known deployments for local commands like status/destroy.
 type State struct {
 	LastDeployment string                      `json:"last_deployment"`
 	Deployments    map[string]DeploymentRecord `json:"deployments"`
+	LastOperation  string                      `json:"last_operation,omitempty"`
+	Operations     map[string]OperationRecord  `json:"operations,omitempty"`
 }
 
 // StateFilePath returns the local state file path for a project.
@@ -65,6 +80,9 @@ func LoadState(projectDir string) (*State, error) {
 	if state.Deployments == nil {
 		state.Deployments = make(map[string]DeploymentRecord)
 	}
+	if state.Operations == nil {
+		state.Operations = make(map[string]OperationRecord)
+	}
 	return &state, nil
 }
 
@@ -75,6 +93,9 @@ func SaveState(projectDir string, state *State) error {
 	}
 	if state.Deployments == nil {
 		state.Deployments = make(map[string]DeploymentRecord)
+	}
+	if state.Operations == nil {
+		state.Operations = make(map[string]OperationRecord)
 	}
 
 	path := StateFilePath(projectDir)
@@ -140,6 +161,83 @@ func (s *State) RemoveDeployment(name string) {
 	}
 }
 
+// StartOperation records a long-running command before remote work begins.
+func (s *State) StartOperation(operationType, deployment, provider, message string) (OperationRecord, error) {
+	if s == nil {
+		return OperationRecord{}, errors.New("state is required")
+	}
+	if s.Operations == nil {
+		s.Operations = make(map[string]OperationRecord)
+	}
+	now := time.Now().UTC()
+	record := OperationRecord{
+		ID:         fmt.Sprintf("%s-%d", strings.TrimSpace(operationType), now.UnixNano()),
+		Type:       strings.TrimSpace(operationType),
+		Deployment: strings.TrimSpace(deployment),
+		Provider:   strings.TrimSpace(provider),
+		Status:     "running",
+		Message:    strings.TrimSpace(message),
+		StartedAt:  now,
+		UpdatedAt:  now,
+	}
+	if record.Type == "" {
+		return OperationRecord{}, errors.New("operation type is required")
+	}
+	if record.Deployment == "" {
+		return OperationRecord{}, errors.New("operation deployment is required")
+	}
+	s.Operations[record.ID] = record
+	s.LastOperation = record.ID
+	return record, nil
+}
+
+// FinishOperation marks a saved operation as completed or failed.
+func (s *State) FinishOperation(id, status, message string) error {
+	if s == nil {
+		return errors.New("state is required")
+	}
+	if s.Operations == nil {
+		s.Operations = make(map[string]OperationRecord)
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("operation id is required")
+	}
+	record, ok := s.Operations[id]
+	if !ok {
+		return ErrDeploymentNotFound
+	}
+	now := time.Now().UTC()
+	record.Status = strings.TrimSpace(status)
+	if record.Status == "" {
+		record.Status = "completed"
+	}
+	record.Message = strings.TrimSpace(message)
+	record.UpdatedAt = now
+	record.FinishedAt = &now
+	s.Operations[id] = record
+	s.LastOperation = id
+	return nil
+}
+
+// LatestOperationFor returns the latest operation recorded for a deployment.
+func (s *State) LatestOperationFor(deployment string) (OperationRecord, bool) {
+	if s == nil || len(s.Operations) == 0 {
+		return OperationRecord{}, false
+	}
+	deployment = strings.TrimSpace(deployment)
+	var latest OperationRecord
+	for _, operation := range s.Operations {
+		if strings.TrimSpace(operation.Deployment) != deployment {
+			continue
+		}
+		if latest.ID == "" || operation.UpdatedAt.After(latest.UpdatedAt) {
+			latest = operation
+		}
+	}
+	return latest, latest.ID != ""
+}
+
 // ResolveDeployment returns a deployment by name, or the latest deployment if name is empty.
 func (s *State) ResolveDeployment(name string) (DeploymentRecord, error) {
 	if s == nil || len(s.Deployments) == 0 {
@@ -170,5 +268,6 @@ func (s *State) ResolveDeployment(name string) (DeploymentRecord, error) {
 func emptyState() *State {
 	return &State{
 		Deployments: make(map[string]DeploymentRecord),
+		Operations:  make(map[string]OperationRecord),
 	}
 }

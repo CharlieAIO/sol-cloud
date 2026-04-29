@@ -10,14 +10,14 @@ The CLI currently supports:
 
 - Fly.io as the original/default provider.
 - Railway as a supported provider with API setup plus `railway up`.
-- Local project config through `.sol-cloud.yml`.
+- Hidden per-project config under the Sol-Cloud user config directory.
 - User credentials in the OS config directory through `internal/config/credentials.go`.
 - Local deployment state in `.sol-cloud/state.json`.
 - Generated deploy artifacts under `.sol-cloud/deployments/<app>/`.
 
 ## Current Workspace Context
 
-This workspace has an ignored local `.sol-cloud.yml` for a Railway deployment:
+This workspace may have an ignored legacy local `.sol-cloud.yml` for a Railway deployment:
 
 - Provider: `railway`
 - App/project name: `sol-cloud-cyoj2zpr`
@@ -25,7 +25,7 @@ This workspace has an ignored local `.sol-cloud.yml` for a Railway deployment:
 - Runtime: `slots_per_epoch=432000`, `ticks_per_slot=64`, `compute_unit_limit=1000000`, `ledger_limit_size=10000`, `ledger_disk_limit_gb=45`
 - It contains several cloned accounts/programs and startup airdrops.
 
-Do not assume this local config is tracked in git. `.sol-cloud.yml`, `.sol-cloud/`, `.sol-cloud.local.yml`, and `*.log` are ignored. Generated artifacts are local operational files, not source of truth, unless the user explicitly asks to inspect or regenerate them.
+Do not assume this legacy local config is tracked in git. `.sol-cloud.yml`, `.sol-cloud/`, `.sol-cloud.local.yml`, and `*.log` are ignored. Generated artifacts are local operational files, not source of truth, unless the user explicitly asks to inspect or regenerate them.
 
 ## Repository Layout
 
@@ -34,6 +34,7 @@ Do not assume this local config is tracked in git. `.sol-cloud.yml`, `.sol-cloud
 - `internal/validator/`: validator runtime config, defaults, and validation.
 - `internal/providers/`: provider abstraction, Fly and Railway implementations, deployment helpers, generated template data, command execution wrappers.
 - `internal/config/`: credentials and local deployment state persistence.
+- `internal/ui/`: dependency-free terminal UI helpers for progress bars, aligned summaries, and other CLI presentation primitives.
 - `internal/utils/`: interactive prompts and provider-safe name generation.
 - `internal/monitor/`: slot progression history used by `sol-cloud watch`.
 - `templates/`: embedded deployment templates for Docker, nginx, Fly, and the validator entrypoint.
@@ -56,7 +57,7 @@ External CLIs needed by some runtime paths:
 
 ## Configuration Model
 
-User project config is read by Viper from `.sol-cloud.yml` in the current directory by default. `cmd/root.go` also adds `$HOME/.config/sol-cloud` as a config search path and enables environment overrides with prefix `SOL_CLOUD`; dots and hyphens map to underscores.
+User project config is read by Viper from a hidden per-project file by default. The path comes from `internal/config.ProjectConfigPath(projectDir)`, which stores configs under the Sol-Cloud user config directory in `projects/<project-slug>-<path-hash>.yml`. `SOL_CLOUD_CONFIG_DIR` and `XDG_CONFIG_HOME` affect this root through the existing credentials config-dir logic. `--config` can point at an explicit file. Legacy local `.sol-cloud.yml` is read only as a compatibility fallback when no hidden project config exists. Environment overrides still use prefix `SOL_CLOUD`; dots and hyphens map to underscores.
 
 Top-level config fields:
 
@@ -92,7 +93,7 @@ Important validation behavior:
 
 Implemented in `cmd/init.go`.
 
-- Interactive setup writes `.sol-cloud.yml`.
+- Interactive setup writes the hidden per-project config and prints its path.
 - `--yes` skips prompts, generates an app name, and uses defaults.
 - `--provider railway` with `--yes` chooses Railway defaults.
 - Generated config includes `ledger_disk_limit_gb`.
@@ -180,6 +181,7 @@ Implemented in `cmd/watch.go`.
 - Detects stuck validators when slot has not advanced beyond `--stuck-threshold`.
 - Can restart through provider `Restart`, either interactively or with `--auto-restart`.
 - Has cooldown and max restart controls.
+- Uses compact text status lines rather than emoji-heavy output so watcher logs stay readable when redirected.
 
 ### `sol-cloud clone-program`
 
@@ -190,7 +192,7 @@ Implemented in `cmd/clone.go`.
 - Can snapshot additional accounts and optionally the upgradeable programdata account.
 - Writes helper account flags under `.sol-cloud/programs/<program>-accounts/validator-account-flags.txt`.
 - Optional `--deploy` deploys the dumped binary to a target validator, resolving target RPC from local state if not provided.
-- This command is local Solana CLI based; it does not modify `.sol-cloud.yml`.
+- This command is local Solana CLI based; it does not modify project config.
 
 ## Provider Abstraction
 
@@ -339,12 +341,22 @@ State:
 - Saved with mode `0644`.
 - Tracks deployment records: name, provider, RPC URL, WebSocket URL, region, artifact dir, dashboard URL, timestamps.
 - `LastDeployment` drives default `status`, `destroy`, `watch`, and `clone-program --deploy` target resolution.
+- Also tracks long-running operation records in `operations` with `last_operation`. Deploy writes a `running` operation before remote provider work starts and updates it to `succeeded` or `failed` when the command finishes. `status` displays the latest operation for the deployment when available.
+
+## CLI Interface
+
+- Running `sol-cloud` with no subcommand opens the interactive command menu on a TTY. Non-interactive/root redirected usage prints normal Cobra help. Direct commands like `sol-cloud deploy` remain scriptable.
+- `internal/ui.Progress` renders animated progress bars for terminals and plain append-only lines for redirected output.
+- Providers accept an optional progress reporter through `providers.Config.Reporter`; keep provider updates high-level so deploy output stays stable and provider internals remain easy to modify.
+- `internal/ui.Fields` and `internal/ui.Header` are the standard result-summary format for deploy, dry-run, status, destroy, init, and clone-program output.
+- `utils.SelectOptionArrow` is the shared arrow-key selector. It supports Up/Down, `j`/`k`, typed filtering, Backspace, Enter, Ctrl+E for custom/manual entry, and Ctrl+C to cancel. Keep fallbacks to plain text prompts for non-interactive input.
 
 ## Local/Generated Files to Treat Carefully
 
 Ignored files commonly present in this workspace:
 
-- `.sol-cloud.yml`: local project config, may include user-specific app and clone settings.
+- Hidden per-project config: may include user-specific app and clone settings. It should live under the Sol-Cloud user config directory, not in the repository.
+- `.sol-cloud.yml`: legacy local config fallback only; do not create new local config files unless the user explicitly passes `--config`.
 - `.sol-cloud/`: generated deploy artifacts, state, deploy logs, program dumps.
 - `.tmp-go-cache`: local Go cache if used.
 - `*.log`
@@ -364,7 +376,7 @@ bash -n .sol-cloud/deployments/<app>/entrypoint.sh
 
 Notes:
 
-- `go run . deploy --dry-run` renders deployment artifacts using the current local `.sol-cloud.yml`.
+- `go run . deploy --dry-run` renders deployment artifacts using the hidden per-project config, or a legacy local `.sol-cloud.yml` only if no hidden config exists.
 - If Go cannot write to the normal build cache in the sandbox, rerun with allowed/escalated permissions instead of changing code.
 - For template-only changes, `bash -n` on the rendered entrypoint is important because Go tests do not execute shell templates.
 - Use `gofmt -w` on changed Go files.
@@ -440,4 +452,3 @@ After making changes:
 3. If templates changed, render with `go run . deploy --dry-run`.
 4. Syntax-check rendered shell with `bash -n .sol-cloud/deployments/<app>/entrypoint.sh`.
 5. Summarize changed files and verification clearly.
-

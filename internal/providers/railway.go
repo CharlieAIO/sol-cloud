@@ -64,6 +64,7 @@ func (p *RailwayProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment,
 		projectDir = wd
 	}
 	artifactsDir := filepath.Join(projectDir, ".sol-cloud", "deployments", cfg.Name)
+	reportStep(cfg, "Preparing deployment artifacts")
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create artifacts directory: %w", err)
 	}
@@ -104,10 +105,12 @@ func (p *RailwayProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment,
 		{Name: "entrypoint.sh.tmpl", Dst: filepath.Join(artifactsDir, "entrypoint.sh")},
 	}
 	for _, target := range templateTargets {
+		reportDetail(cfg, "Rendering "+filepath.Base(target.Dst))
 		if err := renderEmbeddedTemplateFile(target.Name, target.Dst, data); err != nil {
 			return nil, err
 		}
 	}
+	reportStep(cfg, "Rendered provider templates")
 
 	deployment := &Deployment{
 		Name:         cfg.Name,
@@ -119,11 +122,13 @@ func (p *RailwayProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment,
 		return deployment, nil
 	}
 
+	reportStep(cfg, "Resolving Railway credentials")
 	token, err := p.resolveAccessToken()
 	if err != nil {
 		return nil, fmt.Errorf("railway auth required: run `sol-cloud auth railway`: %w", err)
 	}
 
+	reportStep(cfg, "Provisioning Railway project, service, volume, and release")
 	logs, domain, projectID, serviceID, deployErr := deployViaRailwayCLI(ctx, token, cfg, artifactsDir)
 	logPath := filepath.Join(artifactsDir, "deploy.log")
 	if strings.TrimSpace(logs) != "" {
@@ -162,6 +167,7 @@ func (p *RailwayProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment,
 		deployment.DashboardURL = fmt.Sprintf("https://railway.app/project/%s", projectID)
 	}
 
+	reportStep(cfg, "Saved Railway deployment identifiers")
 	if !cfg.SkipHealthCheck && deployment.RPCURL != "" {
 		timeout := cfg.HealthCheckTimeout
 		if timeout <= 0 {
@@ -171,9 +177,12 @@ func (p *RailwayProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment,
 		if interval <= 0 {
 			interval = defaultPollInterval
 		}
+		reportStep(cfg, "Waiting for RPC health")
 		if err := waitForRPCHealthy(ctx, deployment.RPCURL, timeout, interval); err != nil {
 			return nil, fmt.Errorf("deployment completed but RPC health check failed: %w", err)
 		}
+	} else {
+		reportStep(cfg, "Skipped RPC health check")
 	}
 
 	return deployment, nil

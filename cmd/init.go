@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/CharlieAIO/sol-cloud/internal/utils"
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -62,25 +66,33 @@ var flyRegionOptions = []utils.Option{
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Run interactive setup and create .sol-cloud.yml",
-	Long:  "Run an interactive setup flow and write a .sol-cloud.yml file in the current directory.",
+	Short: "Run interactive setup and create a hidden project config",
+	Long:  "Run an interactive setup flow and write a hidden per-project config outside the current directory.",
 	Example: `  sol-cloud init
   sol-cloud init --force
   sol-cloud init --yes
   sol-cloud init --yes --provider railway`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		const file = ".sol-cloud.yml"
 		out := cmd.OutOrStdout()
 		reader := bufio.NewReader(cmd.InOrStdin())
 
+		projectDir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get working directory: %w", err)
+		}
+		file, err := appconfig.ProjectConfigPath(projectDir)
+		if err != nil {
+			return fmt.Errorf("resolve project config path: %w", err)
+		}
+
 		if _, err := os.Stat(file); err == nil {
 			if !initForce && !initYes {
-				overwrite, promptErr := utils.YesNo(reader, out, ".sol-cloud.yml already exists. Overwrite it?", false)
+				overwrite, promptErr := utils.YesNo(reader, out, "Hidden project config already exists. Overwrite it?", false)
 				if promptErr != nil {
 					return promptErr
 				}
 				if !overwrite {
-					fmt.Fprintln(out, "init cancelled; existing .sol-cloud.yml was not changed")
+					fmt.Fprintln(out, "init cancelled; existing project config was not changed")
 					return nil
 				}
 			}
@@ -114,12 +126,11 @@ var initCmd = &cobra.Command{
 			return writeInitConfig(out, file, providerName, appName, region, cfg)
 		}
 
-		fmt.Fprintln(out, "Sol-Cloud setup")
+		ui.Header(out, "Sol-Cloud Setup")
 		fmt.Fprintln(out, "Press Enter to accept defaults.")
 		fmt.Fprintln(out)
 
 		providerName := strings.ToLower(strings.TrimSpace(initProvider))
-		var err error
 		if providerName == "" {
 			providerName, err = utils.SelectOptionArrow(cmd.InOrStdin(), out, "Provider", providerOptions, "fly")
 			if err != nil {
@@ -260,18 +271,31 @@ validator:
     upgrade_authority: "%s"
 `, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cfg.LedgerDiskLimitGB, cloneProgramsYAML, airdropYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
 
-	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		return fmt.Errorf("create project config directory: %w", err)
+	}
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
+	viper.SetConfigFile(file)
+	if err := viper.ReadInConfig(); err != nil {
+		return fmt.Errorf("reload project config: %w", err)
+	}
 
-	fmt.Fprintf(out, "created %s\n", file)
+	ui.Header(out, "Config")
+	ui.Fields(out,
+		ui.Field{Label: "File", Value: file},
+		ui.Field{Label: "Provider", Value: providerName},
+		ui.Field{Label: "App", Value: appName},
+		ui.Field{Label: "Region", Value: region},
+	)
 	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(initCmd)
 
-	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite .sol-cloud.yml if it already exists")
+	initCmd.Flags().BoolVar(&initForce, "force", false, "Overwrite hidden project config if it already exists")
 	initCmd.Flags().BoolVarP(&initYes, "yes", "y", false, "Skip all prompts; write config with generated app name and validator defaults")
 	initCmd.Flags().StringVar(&initProvider, "provider", "", "Provider to use (fly or railway); defaults to fly when --yes is set")
 }

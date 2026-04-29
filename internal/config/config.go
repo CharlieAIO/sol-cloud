@@ -2,7 +2,7 @@ package config
 
 import "github.com/CharlieAIO/sol-cloud/internal/validator"
 
-// AppConfig is the top-level .sol-cloud.yml model.
+// AppConfig is the top-level Sol-Cloud project config model.
 type AppConfig struct {
 	Provider  string           `mapstructure:"provider" yaml:"provider"`
 	AppName   string           `mapstructure:"app_name" yaml:"app_name"`

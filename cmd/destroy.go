@@ -10,6 +10,7 @@ import (
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -80,16 +81,28 @@ var destroyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		out := cmd.OutOrStdout()
+		progress := ui.NewProgress(out, 3)
+		progress.Start("Destroying cloud resources")
 		if err := provider.Destroy(cmd.Context(), name); err != nil {
+			progress.Fail("Destroy failed")
 			return err
 		}
 
+		progress.Step("Updating local state")
 		state.RemoveDeployment(name)
 		if err := appconfig.SaveState(projectDir, state); err != nil {
+			progress.Fail("Destroy failed")
 			return fmt.Errorf("destroyed app but failed to update local state: %w", err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "validator destroyed: %s\n", name)
+		progress.Success("Validator destroyed")
+		ui.Header(out, "Destroyed")
+		ui.Fields(out,
+			ui.Field{Label: "Validator", Value: name},
+			ui.Field{Label: "Provider", Value: providerName},
+			ui.Field{Label: "State", Value: appconfig.StateFilePath(projectDir)},
+		)
 		return nil
 	},
 }

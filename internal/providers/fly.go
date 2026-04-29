@@ -71,6 +71,7 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		projectDir = wd
 	}
 	artifactsDir := filepath.Join(projectDir, ".sol-cloud", "deployments", cfg.Name)
+	reportStep(cfg, "Preparing deployment artifacts")
 	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create artifacts directory: %w", err)
 	}
@@ -114,10 +115,12 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		{Name: "entrypoint.sh.tmpl", Dst: filepath.Join(artifactsDir, "entrypoint.sh")},
 	}
 	for _, target := range templateTargets {
+		reportDetail(cfg, "Rendering "+filepath.Base(target.Dst))
 		if err := renderEmbeddedTemplateFile(target.Name, target.Dst, data); err != nil {
 			return nil, err
 		}
 	}
+	reportStep(cfg, "Rendered provider templates")
 
 	deployment := &Deployment{
 		Name:         cfg.Name,
@@ -132,11 +135,13 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		return deployment, nil
 	}
 
+	reportStep(cfg, "Resolving Fly credentials")
 	token, err := p.resolveAccessToken()
 	if err != nil {
 		return nil, fmt.Errorf("fly auth required: run `sol-cloud auth fly`: %w", err)
 	}
 
+	reportStep(cfg, "Provisioning Fly app, network, volume, and release")
 	deployOutput, host, err := p.deployViaAPI(ctx, token, cfg, artifactsDir)
 	logPath := filepath.Join(artifactsDir, "deploy.log")
 	if strings.TrimSpace(deployOutput) != "" {
@@ -168,9 +173,12 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 		if interval <= 0 {
 			interval = defaultPollInterval
 		}
+		reportStep(cfg, "Waiting for RPC health")
 		if err := waitForRPCHealthy(ctx, deployment.RPCURL, timeout, interval); err != nil {
 			return nil, fmt.Errorf("deployment completed but RPC health check failed: %w", err)
 		}
+	} else {
+		reportStep(cfg, "Skipped RPC health check")
 	}
 
 	return deployment, nil

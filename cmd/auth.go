@@ -9,6 +9,7 @@ import (
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/CharlieAIO/sol-cloud/internal/utils"
 	"github.com/spf13/cobra"
 )
@@ -71,14 +72,19 @@ You can use either a personal token or an organization token.`,
 			org = strings.TrimSpace(org)
 		}
 
+		var progress *ui.Progress
 		if !authFlySkipVerify {
+			progress = ui.NewProgress(out, 2)
+			progress.Start("Verifying Fly token")
 			verifyCtx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
 
 			provider := providers.NewFlyProvider()
 			if err := provider.VerifyAccessToken(verifyCtx, token); err != nil {
+				progress.Fail("Fly token verification failed")
 				return fmt.Errorf("verify fly token: %w", err)
 			}
+			progress.Step("Saving Fly credentials")
 		}
 
 		creds.Fly.AccessToken = token
@@ -87,15 +93,25 @@ You can use either a personal token or an organization token.`,
 			creds.Fly.VerifiedAt = time.Now().UTC()
 		}
 		if err := appconfig.SaveCredentials(creds); err != nil {
+			if progress != nil {
+				progress.Fail("Save credentials failed")
+			}
 			return err
 		}
 
 		_, err = appconfig.CredentialsFilePath()
 		if err != nil {
+			if progress != nil {
+				progress.Fail("Resolve credentials path failed")
+			}
 			return err
 		}
 
-		fmt.Fprintln(out, "Fly authentication saved.")
+		if progress != nil {
+			progress.Success("Fly authentication saved")
+		} else {
+			fmt.Fprintln(out, "Fly authentication saved.")
+		}
 		return nil
 	},
 }
@@ -131,13 +147,19 @@ Create a token at https://railway.app/account/tokens`,
 
 		provider := providers.NewRailwayProvider()
 
+		var progress *ui.Progress
 		if !authRailwaySkipVerify {
+			progress = ui.NewProgress(out, 3)
+			progress.Start("Verifying Railway token")
 			verifyCtx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
 			defer cancel()
 
 			if err := provider.VerifyAccessToken(verifyCtx, token); err != nil {
+				progress.Fail("Railway token verification failed")
 				return fmt.Errorf("verify railway token: %w", err)
 			}
+			progress.Success("Railway token verified")
+			progress = nil
 		}
 
 		// Fetch workspaces and save the ID so deploy never needs to prompt for it.
@@ -192,6 +214,9 @@ Create a token at https://railway.app/account/tokens`,
 			creds.Railway.VerifiedAt = time.Now().UTC()
 		}
 		if err := appconfig.SaveCredentials(creds); err != nil {
+			if progress != nil {
+				progress.Fail("Save credentials failed")
+			}
 			return err
 		}
 

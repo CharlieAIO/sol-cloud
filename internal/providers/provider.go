@@ -22,6 +22,13 @@ type Config struct {
 	HealthCheckInterval time.Duration
 	VolumeSize          int  // Volume size in GB, default 10
 	SkipVolume          bool // Skip volume creation (ephemeral storage)
+	Reporter            Reporter
+}
+
+// Reporter receives high-level progress updates from providers.
+type Reporter interface {
+	Step(message string)
+	Detail(message string)
 }
 
 // Deployment includes canonical endpoints for a deployed validator.
@@ -101,5 +108,17 @@ func NewProvider(name string) (Provider, error) {
 		return NewRailwayProvider(), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider %q: valid providers are fly, railway", name)
+	}
+}
+
+func reportStep(cfg *Config, message string) {
+	if cfg != nil && cfg.Reporter != nil {
+		cfg.Reporter.Step(message)
+	}
+}
+
+func reportDetail(cfg *Config, message string) {
+	if cfg != nil && cfg.Reporter != nil {
+		cfg.Reporter.Detail(message)
 	}
 }

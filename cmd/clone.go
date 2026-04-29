@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -75,15 +76,27 @@ var cloneCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "cloning program %s from %s\n", programID, sourceRPC)
+		out := cmd.OutOrStdout()
+		totalSteps := 3
+		if len(cloneAccounts) > 0 || cloneIncludeProgData {
+			totalSteps++
+		}
+		if cloneDeploy {
+			totalSteps++
+		}
+		progress := ui.NewProgress(out, totalSteps)
+		progress.Start("Dumping program binary")
 		dumpOutput, err := runSolana(cmd.Context(), "program", "dump", "-u", sourceRPC, programID, outPath)
 		if err != nil {
+			progress.Fail("Clone failed")
 			return fmt.Errorf("solana program dump failed: %w\n%s", err, strings.TrimSpace(dumpOutput))
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "program binary written: %s\n", outPath)
+		progress.Step("Program binary written")
 
+		progress.Step("Collecting account snapshots")
 		accountIDs, collectErr := collectAccountIDsForClone(cmd.Context(), sourceRPC, programID, cloneAccounts, cloneIncludeProgData)
 		if collectErr != nil {
+			progress.Fail("Clone failed")
 			return collectErr
 		}
 		if len(accountIDs) > 0 {
@@ -104,35 +117,44 @@ var cloneCmd = &cobra.Command{
 					accountID,
 				)
 				if err != nil {
+					progress.Fail("Clone failed")
 					return fmt.Errorf("dump account %s failed: %w\n%s", accountID, err, strings.TrimSpace(accountOutput))
 				}
 				records = append(records, accountSnapshotRecord{
 					Address: accountID,
 					Path:    out,
 				})
-				fmt.Fprintf(cmd.OutOrStdout(), "account snapshot written: %s\n", out)
+				progress.Detail("Account snapshot written: " + out)
 			}
 
 			if cloneWriteAcctFlags {
 				flagsPath, err := writeAccountFlagsFile(accountsDir, records)
 				if err != nil {
+					progress.Fail("Clone failed")
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "validator account-flags file: %s\n", flagsPath)
-				fmt.Fprintln(cmd.OutOrStdout(), "note: load snapshots at validator startup with `solana-test-validator --reset $(cat <flags-file>)`")
+				progress.Detail("Validator account flags written: " + flagsPath)
 			}
 
 			if cloneDeploy {
-				fmt.Fprintln(cmd.OutOrStdout(), "note: account snapshots are exported only; loading them requires validator restart with --account flags")
+				progress.Detail("Account snapshots exported; load them with validator --account flags")
 			}
 		}
 
 		if !cloneDeploy {
+			progress.Success("Clone complete")
+			ui.Header(out, "Clone")
+			ui.Fields(out,
+				ui.Field{Label: "Program", Value: programID},
+				ui.Field{Label: "Source RPC", Value: sourceRPC},
+				ui.Field{Label: "Binary", Value: outPath},
+			)
 			return nil
 		}
 
 		targetRPC, err := resolveCloneTargetRPC(projectDir, strings.TrimSpace(cloneTargetRPC), strings.TrimSpace(cloneDeploymentName))
 		if err != nil {
+			progress.Fail("Clone failed")
 			return err
 		}
 
@@ -144,17 +166,26 @@ var cloneCmd = &cobra.Command{
 			deployArgs = append(deployArgs, "--program-id", programKeypair)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "deploying cloned program to %s\n", targetRPC)
+		progress.Step("Deploying cloned program")
 		deployOutput, err := runSolana(cmd.Context(), deployArgs...)
 		if err != nil {
+			progress.Fail("Clone deploy failed")
 			return fmt.Errorf("solana program deploy failed: %w\n%s", err, strings.TrimSpace(deployOutput))
 		}
 
 		programIDOut := parseDeployedProgramID(deployOutput)
+		progress.Success("Clone deploy complete")
+		ui.Header(out, "Clone")
+		ui.Fields(out,
+			ui.Field{Label: "Program", Value: programID},
+			ui.Field{Label: "Source RPC", Value: sourceRPC},
+			ui.Field{Label: "Target RPC", Value: targetRPC},
+			ui.Field{Label: "Binary", Value: outPath},
+		)
 		if programIDOut == "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "deploy completed (could not parse Program Id from output)\n")
+			ui.Fields(out, ui.Field{Label: "Deploy", Value: "completed; Program Id was not found in output"})
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "deployed program id: %s\n", programIDOut)
+			ui.Fields(out, ui.Field{Label: "Deployed program", Value: programIDOut})
 		}
 		return nil
 	},

@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/monitor"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -84,24 +87,32 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		record.Provider = "fly"
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "👀 Watching validator: %s\n", record.Name)
-	fmt.Fprintf(cmd.OutOrStdout(), "📡 RPC endpoint: %s\n", record.RPCURL)
-	fmt.Fprintf(cmd.OutOrStdout(), "⏱️  Check interval: %s\n", watchCheckInterval)
-	fmt.Fprintf(cmd.OutOrStdout(), "⚠️  Stuck threshold: %s\n", watchStuckThreshold)
+	out := cmd.OutOrStdout()
+	ui.Header(out, "Watch")
 	if watchMaxRestarts > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "🔄 Max restarts: %d\n", watchMaxRestarts)
+		ui.Fields(out,
+			ui.Field{Label: "Validator", Value: record.Name},
+			ui.Field{Label: "RPC", Value: record.RPCURL},
+			ui.Field{Label: "Check interval", Value: watchCheckInterval.String()},
+			ui.Field{Label: "Stuck threshold", Value: watchStuckThreshold.String()},
+			ui.Field{Label: "Max restarts", Value: fmt.Sprintf("%d", watchMaxRestarts)},
+			ui.Field{Label: "Restart cooldown", Value: watchRestartCooldown.String()},
+			ui.Field{Label: "Auto-restart", Value: fmt.Sprintf("%t", watchAutoRestart)},
+		)
 	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "🔄 Max restarts: unlimited\n")
+		ui.Fields(out,
+			ui.Field{Label: "Validator", Value: record.Name},
+			ui.Field{Label: "RPC", Value: record.RPCURL},
+			ui.Field{Label: "Check interval", Value: watchCheckInterval.String()},
+			ui.Field{Label: "Stuck threshold", Value: watchStuckThreshold.String()},
+			ui.Field{Label: "Max restarts", Value: "unlimited"},
+			ui.Field{Label: "Restart cooldown", Value: watchRestartCooldown.String()},
+			ui.Field{Label: "Auto-restart", Value: fmt.Sprintf("%t", watchAutoRestart)},
+		)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "⏳ Restart cooldown: %s\n", watchRestartCooldown)
-	if watchAutoRestart {
-		fmt.Fprintf(cmd.OutOrStdout(), "🤖 Auto-restart: enabled\n")
-	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "👤 Auto-restart: disabled (manual confirmation required)\n")
-	}
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-	fmt.Fprintln(cmd.OutOrStdout(), "Press Ctrl+C to stop watching")
-	fmt.Fprintln(cmd.OutOrStdout(), "")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Press Ctrl+C to stop watching")
+	fmt.Fprintln(out)
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -120,7 +131,8 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		maxRestarts:     watchMaxRestarts,
 		restartCooldown: watchRestartCooldown,
 		autoRestart:     watchAutoRestart,
-		output:          cmd.OutOrStdout(),
+		input:           cmd.InOrStdin(),
+		output:          out,
 	}
 
 	return watcher.Run(ctx)
@@ -136,6 +148,7 @@ type ValidatorWatcher struct {
 	maxRestarts     int
 	restartCooldown time.Duration
 	autoRestart     bool
+	input           io.Reader
 	output          interface{ Write([]byte) (int, error) }
 
 	restartCount    int
@@ -150,7 +163,7 @@ func (w *ValidatorWatcher) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Fprintln(w.output, "\n🛑 Watcher stopped")
+			fmt.Fprintln(w.output, "\nWatcher stopped")
 			return nil
 
 		case <-ticker.C:
@@ -158,12 +171,12 @@ func (w *ValidatorWatcher) Run(ctx context.Context) error {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return nil
 				}
-				fmt.Fprintf(w.output, "⚠️  Check error: %v\n", err)
+				fmt.Fprintf(w.output, "warn [%s] check error: %v\n", time.Now().Format("15:04:05"), err)
 			}
 
 			// Check if max restarts reached
 			if w.maxRestarts > 0 && w.restartCount >= w.maxRestarts {
-				fmt.Fprintf(w.output, "\n🛑 Max restarts (%d) reached, stopping watcher\n", w.maxRestarts)
+				fmt.Fprintf(w.output, "\nMax restarts (%d) reached, stopping watcher\n", w.maxRestarts)
 				return nil
 			}
 		}
@@ -178,7 +191,7 @@ func (w *ValidatorWatcher) checkAndRestart(ctx context.Context) error {
 	var slot uint64
 	if err := rpcCall(checkCtx, w.rpcURL, "getSlot", []any{}, &slot); err != nil {
 		// RPC unreachable - don't treat as stuck, just log warning
-		fmt.Fprintf(w.output, "⚠️  [%s] RPC unreachable: %v\n", time.Now().Format("15:04:05"), err)
+		fmt.Fprintf(w.output, "warn [%s] RPC unreachable: %v\n", time.Now().Format("15:04:05"), err)
 		return nil
 	}
 
@@ -189,54 +202,57 @@ func (w *ValidatorWatcher) checkAndRestart(ctx context.Context) error {
 	stuck, info := w.history.IsStuck()
 	if !stuck {
 		if w.history.HasProgressed() {
-			fmt.Fprintf(w.output, "✅ [%s] Slot: %d (progressing)\n", time.Now().Format("15:04:05"), slot)
+			fmt.Fprintf(w.output, "ok   [%s] slot=%d progressing\n", time.Now().Format("15:04:05"), slot)
 		} else {
-			fmt.Fprintf(w.output, "⏳ [%s] Slot: %d (waiting for progression)\n", time.Now().Format("15:04:05"), slot)
+			fmt.Fprintf(w.output, "wait [%s] slot=%d waiting for progression\n", time.Now().Format("15:04:05"), slot)
 		}
 		return nil
 	}
 
 	// Validator is stuck
-	fmt.Fprintf(w.output, "\n🚨 [%s] STUCK DETECTED: %s\n", time.Now().Format("15:04:05"), info.String())
+	fmt.Fprintf(w.output, "\nalert [%s] stuck detected: %s\n", time.Now().Format("15:04:05"), info.String())
 
 	// Check cooldown
 	if !w.lastRestartTime.IsZero() {
 		elapsed := time.Since(w.lastRestartTime)
 		if elapsed < w.restartCooldown {
 			remaining := w.restartCooldown - elapsed
-			fmt.Fprintf(w.output, "⏸️  Restart cooldown active, waiting %s...\n", remaining.Round(time.Second))
+			fmt.Fprintf(w.output, "wait restart cooldown active, remaining=%s\n", remaining.Round(time.Second))
 			return nil
 		}
 	}
 
 	// Confirm restart if not auto mode
 	if !w.autoRestart {
-		fmt.Fprintf(w.output, "\n❓ Restart validator %q? [y/N]: ", w.name)
-		var response string
-		fmt.Scanln(&response)
+		fmt.Fprintf(w.output, "\nRestart validator %q? [y/N]: ", w.name)
+		reader := bufio.NewReader(w.input)
+		response, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("read restart confirmation: %w", err)
+		}
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
-			fmt.Fprintln(w.output, "⏭️  Restart skipped by user")
+			fmt.Fprintln(w.output, "restart skipped")
 			return nil
 		}
 	}
 
 	// Perform restart
-	fmt.Fprintf(w.output, "🔄 [%s] Restarting validator %q...\n", time.Now().Format("15:04:05"), w.name)
+	fmt.Fprintf(w.output, "run  [%s] restarting validator %q\n", time.Now().Format("15:04:05"), w.name)
 
 	restartCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	if err := w.provider.Restart(restartCtx, w.name); err != nil {
-		fmt.Fprintf(w.output, "❌ Restart failed: %v\n", err)
+		fmt.Fprintf(w.output, "fail restart failed: %v\n", err)
 		return fmt.Errorf("restart failed: %w", err)
 	}
 
 	w.restartCount++
 	w.lastRestartTime = time.Now()
 
-	fmt.Fprintf(w.output, "✅ [%s] Restart successful (restart #%d)\n", time.Now().Format("15:04:05"), w.restartCount)
-	fmt.Fprintln(w.output, "⏳ Waiting for validator to recover...")
+	fmt.Fprintf(w.output, "done [%s] restart successful restart=%d\n", time.Now().Format("15:04:05"), w.restartCount)
+	fmt.Fprintln(w.output, "wait validator recovery")
 	fmt.Fprintln(w.output, "")
 
 	return nil

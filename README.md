@@ -12,9 +12,15 @@ Sol-Cloud gives you the flexibility of `solana-test-validator`, but hosted on Fl
 
 Start in 3 steps:
 
+- `sol-cloud` for the interactive menu, or:
 - `sol-cloud init`
 - `sol-cloud auth fly`
 - `sol-cloud deploy`
+
+The CLI uses terminal-native progress bars for long-running work, compact
+aligned summaries for results, and arrow-key selectors for provider, region,
+and workspace choices. When output is redirected, progress degrades to plain
+append-only status lines.
 
 ## Install
 
@@ -58,7 +64,7 @@ Maintainers: Homebrew tap automation setup is in `docs/HOMEBREW_TAP_SETUP.md`.
 ## Quick start 🚀
 
 ```bash
-# 1) Create .sol-cloud.yml
+# 1) Create hidden project config
 sol-cloud init
 
 # 2) Connect Fly (personal or org token)
@@ -102,7 +108,13 @@ sol-cloud clone-program <program-id> --deploy  # requires local Solana CLI
 - `--program-id-keypair`
 - `--upgrade-authority`
 
-## Config (`.sol-cloud.yml`)
+## Config
+
+`sol-cloud init` writes a hidden per-project config outside your repository,
+under the Sol-Cloud user config directory. The exact path is printed after init.
+Use `--config <path>` when you intentionally want to point at a specific file.
+Old local `.sol-cloud.yml` files are still read as a compatibility fallback, but
+new configs are not created in the working tree.
 
 ```yaml
 provider: fly
@@ -129,8 +141,9 @@ cap, clamped to 85% of the mounted filesystem so smaller volumes stay protected.
 
 ## Logs and state
 
-- `.sol-cloud.yml`
-- `.sol-cloud/state.json`
+- hidden project config under the Sol-Cloud user config directory
+- `.sol-cloud/state.json` records deployments and the latest long-running
+  deploy operation state (`running`, `succeeded`, or `failed`)
 - `.sol-cloud/deployments/<app>/deploy.log`
 
 ## Troubleshooting 🔧

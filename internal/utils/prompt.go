@@ -130,19 +130,26 @@ func SelectOptionArrow(in io.Reader, out io.Writer, title string, options []Opti
 		return "", err
 	}
 	defer restore()
+	defer fmt.Fprint(out, "\033[?25h")
 
 	selected := findOptionIndex(options, defaultKey)
 	if selected < 0 {
 		selected = 0
 	}
 	search := ""
+	filtered := filterOptions(options, search)
+	selected = selectedIndexInFiltered(filtered, options[selected].Key)
+	if selected < 0 {
+		selected = 0
+	}
+	renderedLines := 0
 
-	fmt.Fprintf(out, "%s selector: \u2191/\u2193 to move, Enter to confirm, type to filter, Backspace to edit, m for manual\n", title)
 	for {
-		drawCurrentOption(out, title, options[selected], search)
+		renderedLines = drawOptionMenu(out, title, filtered, selected, search, renderedLines)
 
 		key, text, readErr := readSelectionKey(inFile)
 		if readErr != nil {
+			clearOptionMenu(out, renderedLines)
 			return "", readErr
 		}
 
@@ -150,43 +157,140 @@ func SelectOptionArrow(in io.Reader, out io.Writer, title string, options []Opti
 		case "up":
 			selected--
 			if selected < 0 {
-				selected = len(options) - 1
+				selected = len(filtered) - 1
 			}
 		case "down":
 			selected++
-			if selected >= len(options) {
+			if selected >= len(filtered) {
 				selected = 0
 			}
 		case "text":
 			search += text
-			if idx := findOptionMatch(options, search); idx >= 0 {
+			filtered = filterOptions(options, search)
+			if len(filtered) == 0 {
+				filtered = options
+				search = ""
+			}
+			if idx := findOptionMatch(filtered, search); idx >= 0 {
 				selected = idx
+			} else {
+				selected = 0
 			}
 		case "backspace":
 			if len(search) > 0 {
 				search = search[:len(search)-1]
 			}
-			if idx := findOptionMatch(options, search); idx >= 0 {
+			filtered = filterOptions(options, search)
+			if len(filtered) == 0 {
+				filtered = options
+			}
+			if selected >= len(filtered) {
+				selected = len(filtered) - 1
+			}
+			if selected < 0 {
+				selected = 0
+			}
+			if idx := findOptionMatch(filtered, search); idx >= 0 {
 				selected = idx
 			}
 		case "enter":
-			fmt.Fprint(out, "\r\n")
-			return options[selected].Key, nil
+			clearOptionMenu(out, renderedLines)
+			return filtered[selected].Key, nil
 		case "manual":
-			fmt.Fprint(out, "\r\n")
+			clearOptionMenu(out, renderedLines)
 			return "", ErrManualSelection
 		case "cancel":
-			fmt.Fprint(out, "\r\n")
+			clearOptionMenu(out, renderedLines)
 			return "", errors.New("selection cancelled")
 		}
 	}
 }
 
-func drawCurrentOption(out io.Writer, title string, option Option, search string) {
-	fmt.Fprintf(out, "\r\033[2K%s: %s (%s)", title, option.Key, option.Label)
-	if strings.TrimSpace(search) != "" {
-		fmt.Fprintf(out, " | filter: %s", search)
+func drawOptionMenu(out io.Writer, title string, options []Option, selected int, search string, previousLines int) int {
+	if len(options) == 0 {
+		return previousLines
 	}
+	visible := visibleOptionWindow(options, selected, 7)
+	lines := len(visible) + 3
+
+	if previousLines > 0 {
+		fmt.Fprintf(out, "\r\033[%dA\033[J", previousLines)
+	}
+
+	fmt.Fprintf(out, "\033[?25l%s\n", title)
+	fmt.Fprintln(out, "Use Up/Down, j/k, type to filter, Enter to select, Ctrl+E for custom, Ctrl+C to cancel")
+	if strings.TrimSpace(search) != "" {
+		fmt.Fprintf(out, "Filter: %s\n", search)
+	} else {
+		fmt.Fprintln(out, "Filter:")
+	}
+	for _, item := range visible {
+		cursor := " "
+		if item.Index == selected {
+			cursor = ">"
+		}
+		fmt.Fprintf(out, "%s %-22s %s\n", cursor, item.Option.Key, item.Option.Label)
+	}
+	return lines
+}
+
+func clearOptionMenu(out io.Writer, renderedLines int) {
+	if renderedLines > 0 {
+		fmt.Fprintf(out, "\r\033[%dA\033[J", renderedLines)
+	}
+	fmt.Fprint(out, "\033[?25h")
+}
+
+type visibleOption struct {
+	Index  int
+	Option Option
+}
+
+func visibleOptionWindow(options []Option, selected, limit int) []visibleOption {
+	if limit <= 0 || len(options) <= limit {
+		items := make([]visibleOption, len(options))
+		for i, option := range options {
+			items[i] = visibleOption{Index: i, Option: option}
+		}
+		return items
+	}
+	start := selected - limit/2
+	if start < 0 {
+		start = 0
+	}
+	if start+limit > len(options) {
+		start = len(options) - limit
+	}
+	items := make([]visibleOption, 0, limit)
+	for i := start; i < start+limit; i++ {
+		items = append(items, visibleOption{Index: i, Option: options[i]})
+	}
+	return items
+}
+
+func filterOptions(options []Option, query string) []Option {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return append([]Option(nil), options...)
+	}
+	filtered := make([]Option, 0, len(options))
+	for _, option := range options {
+		key := strings.ToLower(option.Key)
+		label := strings.ToLower(option.Label)
+		if strings.Contains(key, query) || strings.Contains(label, query) {
+			filtered = append(filtered, option)
+		}
+	}
+	return filtered
+}
+
+func selectedIndexInFiltered(options []Option, key string) int {
+	for i, option := range options {
+		if option.Key == key {
+			return i
+		}
+	}
+	return -1
 }
 
 func findOptionIndex(options []Option, key string) int {
@@ -238,10 +342,10 @@ func readSelectionKey(inFile *os.File) (string, string, error) {
 		return "enter", "", nil
 	case 3:
 		return "cancel", "", nil
+	case 5:
+		return "manual", "", nil
 	case 127, 8:
 		return "backspace", "", nil
-	case 'm', 'M':
-		return "manual", "", nil
 	case 27:
 		_, err = inFile.Read(buf[1:2])
 		if err != nil {

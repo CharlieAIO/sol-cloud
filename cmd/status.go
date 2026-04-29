@@ -14,6 +14,7 @@ import (
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -53,6 +54,10 @@ var statusCmd = &cobra.Command{
 			record.Provider = "fly"
 		}
 
+		out := cmd.OutOrStdout()
+		progress := ui.NewProgress(out, 2)
+		progress.Start("Checking provider status")
+
 		providerState := "unknown"
 		providerErrText := ""
 		provider, providerErr := providers.NewProvider(record.Provider)
@@ -71,6 +76,7 @@ var statusCmd = &cobra.Command{
 			providerState = providerStatus.State
 		}
 
+		progress.Step("Checking RPC metrics")
 		slot, tps, healthText := "n/a", "n/a", "unreachable"
 		statusCtx, cancel := context.WithTimeout(cmd.Context(), statusTimeout)
 		defer cancel()
@@ -88,22 +94,35 @@ var statusCmd = &cobra.Command{
 
 		statusLabel := providerState
 		if strings.EqualFold(providerState, "running") {
-			statusLabel = "Running ✓"
+			statusLabel = "running"
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Validator: %s\n", record.Name)
-		fmt.Fprintf(cmd.OutOrStdout(), "Provider:  %s\n", record.Provider)
-		fmt.Fprintf(cmd.OutOrStdout(), "Status:    %s\n", statusLabel)
-		fmt.Fprintf(cmd.OutOrStdout(), "Health:    %s\n", healthText)
-		fmt.Fprintf(cmd.OutOrStdout(), "Slot:      %s\n", slot)
-		fmt.Fprintf(cmd.OutOrStdout(), "TPS:       %s\n", tps)
-		fmt.Fprintf(cmd.OutOrStdout(), "RPC:       %s\n", record.RPCURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "WebSocket: %s\n", record.WebSocketURL)
-		if record.DashboardURL != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "Dashboard: %s\n", record.DashboardURL)
+		progress.Success("Status loaded")
+
+		operationText := ""
+		if operation, ok := state.LatestOperationFor(record.Name); ok {
+			when := operation.UpdatedAt.Local().Format(time.RFC3339)
+			operationText = fmt.Sprintf("%s %s at %s", operation.Type, operation.Status, when)
+			if operation.Message != "" {
+				operationText += " (" + operation.Message + ")"
+			}
 		}
+
+		ui.Header(out, "Status")
+		ui.Fields(out,
+			ui.Field{Label: "Validator", Value: record.Name},
+			ui.Field{Label: "Provider", Value: record.Provider},
+			ui.Field{Label: "State", Value: statusLabel},
+			ui.Field{Label: "Health", Value: healthText},
+			ui.Field{Label: "Slot", Value: slot},
+			ui.Field{Label: "TPS", Value: tps},
+			ui.Field{Label: "RPC", Value: record.RPCURL},
+			ui.Field{Label: "WebSocket", Value: record.WebSocketURL},
+			ui.Field{Label: "Dashboard", Value: record.DashboardURL},
+			ui.Field{Label: "Last operation", Value: operationText},
+		)
 		if providerErrText != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "Provider check warning: %s\n", providerErrText)
+			ui.Fields(out, ui.Field{Label: "Provider warning", Value: providerErrText})
 		}
 		return nil
 	},

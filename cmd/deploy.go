@@ -9,6 +9,7 @@ import (
 
 	appconfig "github.com/CharlieAIO/sol-cloud/internal/config"
 	"github.com/CharlieAIO/sol-cloud/internal/providers"
+	"github.com/CharlieAIO/sol-cloud/internal/ui"
 	"github.com/CharlieAIO/sol-cloud/internal/utils"
 	"github.com/CharlieAIO/sol-cloud/internal/validator"
 	"github.com/spf13/cobra"
@@ -44,7 +45,7 @@ var (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy a Solana validator",
-	Long:  "Render deployment artifacts and deploy a Solana validator using app_name from .sol-cloud.yml.",
+	Long:  "Render deployment artifacts and deploy a Solana validator using the hidden project config.",
 	Example: `  sol-cloud deploy
   sol-cloud deploy --dry-run
   sol-cloud deploy --region ord --health-timeout 4m
@@ -59,19 +60,19 @@ var deployCmd = &cobra.Command{
 
 		name := strings.TrimSpace(viper.GetString("app_name"))
 		if name == "" {
-			return fmt.Errorf("app_name is required in .sol-cloud.yml; run `sol-cloud init` first")
+			return fmt.Errorf("app_name is required in project config; run `sol-cloud init` first")
 		}
 		var err error
 		switch providerName {
 		case "fly":
 			name, err = utils.EnsureFlyAppName(name)
 			if err != nil {
-				return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
+				return fmt.Errorf("invalid app_name in project config: %w", err)
 			}
 		case "railway":
 			name, err = utils.EnsureRailwayProjectName(name)
 			if err != nil {
-				return fmt.Errorf("invalid app_name in .sol-cloud.yml: %w", err)
+				return fmt.Errorf("invalid app_name in project config: %w", err)
 			}
 		default:
 			return fmt.Errorf("unsupported provider %q: valid providers are fly, railway", providerName)
@@ -196,71 +197,71 @@ var deployCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		out := cmd.OutOrStdout()
+		totalSteps := 2
 		if !deployDryRun {
-			fmt.Fprintf(cmd.OutOrStdout(), "🚀 Deploying validator via %s...\n", providerName)
+			totalSteps = 7
+			if providerName == "railway" {
+				totalSteps = 8
+			}
 		}
+		progress := ui.NewProgress(out, totalSteps)
+		cfg.Reporter = progress
+		progress.Start("Preparing deploy")
+
+		var state *appconfig.State
+		var operation appconfig.OperationRecord
+		if !deployDryRun {
+			progress.Step("Saving deploy operation state")
+			state, err = appconfig.LoadState(projectDir)
+			if err != nil {
+				progress.Fail("Deploy failed")
+				return fmt.Errorf("load local deployment state: %w", err)
+			}
+			operation, err = state.StartOperation("deploy", name, providerName, "deploy started")
+			if err != nil {
+				progress.Fail("Deploy failed")
+				return fmt.Errorf("start deploy operation state: %w", err)
+			}
+			if err := appconfig.SaveState(projectDir, state); err != nil {
+				progress.Fail("Deploy failed")
+				return fmt.Errorf("save deploy operation state: %w", err)
+			}
+		}
+
 		deployment, err := provider.Deploy(cmd.Context(), cfg)
 		if err != nil {
+			progress.Fail("Deploy failed")
+			if state != nil && operation.ID != "" {
+				_ = state.FinishOperation(operation.ID, "failed", err.Error())
+				_ = appconfig.SaveState(projectDir, state)
+			}
 			return err
 		}
 
 		if deployDryRun {
-			fmt.Fprintln(cmd.OutOrStdout(), "dry run complete; deployment files generated")
-			fmt.Fprintf(cmd.OutOrStdout(), "app:          %s\n", deployment.Name)
-			fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
-			fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d ledger_disk_limit_gb=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
-				validatorCfg.SlotsPerEpoch,
-				validatorCfg.TicksPerSlot,
-				validatorCfg.ComputeUnitLimit,
-				validatorCfg.LedgerLimitSize,
-				validatorCfg.LedgerDiskLimitGB,
-				len(validatorCfg.ClonePrograms),
-				len(validatorCfg.CloneAccounts),
-				len(validatorCfg.CloneUpgradeablePrograms),
+			progress.Success("Dry run complete")
+			ui.Header(out, "Dry Run")
+			ui.Fields(out,
+				ui.Field{Label: "App", Value: deployment.Name},
+				ui.Field{Label: "Provider", Value: deployment.Provider},
+				ui.Field{Label: "Artifacts", Value: deployment.ArtifactsDir},
+				ui.Field{Label: "RPC", Value: deployment.RPCURL},
+				ui.Field{Label: "WebSocket", Value: deployment.WebSocketURL},
+				ui.Field{Label: "Validator", Value: validatorSummary(validatorCfg)},
 			)
 			if validatorCfg.ProgramDeploy.Enabled() {
-				fmt.Fprintf(cmd.OutOrStdout(), "program:      so=%s program_id_keypair=%s upgrade_authority=%s\n",
-					validatorCfg.ProgramDeploy.SOPath,
-					validatorCfg.ProgramDeploy.ProgramIDKeypairPath,
-					validatorCfg.ProgramDeploy.UpgradeAuthorityPath,
+				ui.Fields(out,
+					ui.Field{Label: "Program SO", Value: validatorCfg.ProgramDeploy.SOPath},
+					ui.Field{Label: "Program ID", Value: validatorCfg.ProgramDeploy.ProgramIDKeypairPath},
+					ui.Field{Label: "Authority", Value: validatorCfg.ProgramDeploy.UpgradeAuthorityPath},
 				)
 			}
 			return nil
 		}
 
-		fmt.Fprintln(cmd.OutOrStdout(), "✅ Validator deployed!")
-		fmt.Fprintln(cmd.OutOrStdout(), "🎉 Your Solana RPC + WebSocket endpoints are ready to use:")
-		fmt.Fprintf(cmd.OutOrStdout(), "📡 Solana RPC: %s\n", deployment.RPCURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "🔌 Solana WS:  %s\n", deployment.WebSocketURL)
-		if deployment.DashboardURL != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "🌐 Dashboard:  %s\n", deployment.DashboardURL)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "🧩 App:        %s\n", deployment.Name)
-		fmt.Fprintf(cmd.OutOrStdout(), "📁 Artifacts:  %s\n", deployment.ArtifactsDir)
-		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d ledger_disk_limit_gb=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
-			validatorCfg.SlotsPerEpoch,
-			validatorCfg.TicksPerSlot,
-			validatorCfg.ComputeUnitLimit,
-			validatorCfg.LedgerLimitSize,
-			validatorCfg.LedgerDiskLimitGB,
-			len(validatorCfg.ClonePrograms),
-			len(validatorCfg.CloneAccounts),
-			len(validatorCfg.CloneUpgradeablePrograms),
-		)
-		if validatorCfg.ProgramDeploy.Enabled() {
-			fmt.Fprintf(cmd.OutOrStdout(), "program:      so=%s program_id_keypair=%s upgrade_authority=%s\n",
-				validatorCfg.ProgramDeploy.SOPath,
-				validatorCfg.ProgramDeploy.ProgramIDKeypairPath,
-				validatorCfg.ProgramDeploy.UpgradeAuthorityPath,
-			)
-		}
-
-		state, err := appconfig.LoadState(projectDir)
-		if err != nil {
-			return fmt.Errorf("load local deployment state: %w", err)
-		}
+		progress.Step("Saving deployment state")
 		if err := state.UpsertDeployment(appconfig.DeploymentRecord{
 			Name:         deployment.Name,
 			Provider:     deployment.Provider,
@@ -270,14 +271,40 @@ var deployCmd = &cobra.Command{
 			ArtifactsDir: deployment.ArtifactsDir,
 			DashboardURL: deployment.DashboardURL,
 		}); err != nil {
+			progress.Fail("Deploy failed")
 			return fmt.Errorf("update local deployment state: %w", err)
 		}
+		if operation.ID != "" {
+			if err := state.FinishOperation(operation.ID, "succeeded", "deploy completed"); err != nil {
+				progress.Fail("Deploy failed")
+				return fmt.Errorf("finish deploy operation state: %w", err)
+			}
+		}
 		if err := appconfig.SaveState(projectDir, state); err != nil {
+			progress.Fail("Deploy failed")
 			return fmt.Errorf("save local deployment state: %w", err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "🗂️ State file: %s\n", appconfig.StateFilePath(projectDir))
-		fmt.Fprintf(cmd.OutOrStdout(), "💡 Tip:        solana config set --url %s\n", deployment.RPCURL)
+		progress.Success("Validator deployed")
+		ui.Header(out, "Deployment")
+		ui.Fields(out,
+			ui.Field{Label: "App", Value: deployment.Name},
+			ui.Field{Label: "Provider", Value: deployment.Provider},
+			ui.Field{Label: "RPC", Value: deployment.RPCURL},
+			ui.Field{Label: "WebSocket", Value: deployment.WebSocketURL},
+			ui.Field{Label: "Dashboard", Value: deployment.DashboardURL},
+			ui.Field{Label: "Artifacts", Value: deployment.ArtifactsDir},
+			ui.Field{Label: "State", Value: appconfig.StateFilePath(projectDir)},
+			ui.Field{Label: "Validator", Value: validatorSummary(validatorCfg)},
+			ui.Field{Label: "Solana CLI", Value: fmt.Sprintf("solana config set --url %s", deployment.RPCURL)},
+		)
+		if validatorCfg.ProgramDeploy.Enabled() {
+			ui.Fields(out,
+				ui.Field{Label: "Program SO", Value: validatorCfg.ProgramDeploy.SOPath},
+				ui.Field{Label: "Program ID", Value: validatorCfg.ProgramDeploy.ProgramIDKeypairPath},
+				ui.Field{Label: "Authority", Value: validatorCfg.ProgramDeploy.UpgradeAuthorityPath},
+			)
+		}
 		return nil
 	},
 }
@@ -318,6 +345,19 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func validatorSummary(cfg validator.Config) string {
+	return fmt.Sprintf("slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d ledger_disk_limit_gb=%d clone_programs=%d clone=%d clone_upgradeable_program=%d",
+		cfg.SlotsPerEpoch,
+		cfg.TicksPerSlot,
+		cfg.ComputeUnitLimit,
+		cfg.LedgerLimitSize,
+		cfg.LedgerDiskLimitGB,
+		len(cfg.ClonePrograms),
+		len(cfg.CloneAccounts),
+		len(cfg.CloneUpgradeablePrograms),
+	)
 }
 
 // parseAirdropFlags converts raw --airdrop flag values ("ADDRESS" or "ADDRESS:AMOUNT")
