@@ -113,6 +113,10 @@ positive_int() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
 }
 
+if ! positive_int "$LEDGER_MONITOR_INTERVAL_SECONDS"; then
+  LEDGER_MONITOR_INTERVAL_SECONDS=30
+fi
+
 ledger_usage_bytes() {
   local kb
   kb="$(du -sk "$LEDGER_DIR" 2>/dev/null | awk '{print $1}')"
