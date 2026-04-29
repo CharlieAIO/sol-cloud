@@ -217,19 +217,19 @@ func drawOptionMenu(out io.Writer, title string, options []Option, selected int,
 		fmt.Fprintf(out, "\r\033[%dA\033[J", previousLines)
 	}
 
-	fmt.Fprintf(out, "\033[?25l%s\n", title)
-	fmt.Fprintln(out, "Use Up/Down, j/k, type to filter, Enter to select, Ctrl+E for custom, Ctrl+C to cancel")
+	fmt.Fprintf(out, "\033[?25l%s\r\n", title)
+	fmt.Fprint(out, "Use Up/Down, j/k, type to filter, Enter to select, Ctrl+E for custom, Ctrl+C to cancel\r\n")
 	if strings.TrimSpace(search) != "" {
-		fmt.Fprintf(out, "Filter: %s\n", search)
+		fmt.Fprintf(out, "Filter: %s\r\n", search)
 	} else {
-		fmt.Fprintln(out, "Filter:")
+		fmt.Fprint(out, "Filter:\r\n")
 	}
 	for _, item := range visible {
 		cursor := " "
 		if item.Index == selected {
 			cursor = ">"
 		}
-		fmt.Fprintf(out, "%s %-22s %s\n", cursor, item.Option.Key, item.Option.Label)
+		fmt.Fprintf(out, "%s %-22s %s\r\n", cursor, item.Option.Key, item.Option.Label)
 	}
 	return lines
 }
