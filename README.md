@@ -95,6 +95,7 @@ sol-cloud clone-program <program-id> --deploy  # requires local Solana CLI
 - `--ticks-per-slot`
 - `--compute-unit-limit`
 - `--ledger-limit-size`
+- `--ledger-disk-limit-gb`
 - `--clone` (repeatable)
 - `--clone-upgradeable-program` (repeatable)
 - `--program-so`
@@ -113,6 +114,7 @@ validator:
   ticks_per_slot: 64
   compute_unit_limit: 200000
   ledger_limit_size: 10000
+  ledger_disk_limit_gb: 45
   clone_accounts: []
   clone_upgradeable_programs: []
   program_deploy:
@@ -120,6 +122,10 @@ validator:
     program_id_keypair: ""
     upgrade_authority: ""
 ```
+
+`ledger_disk_limit_gb` guards the persistent ledger volume. The generated
+container clears and restarts the local validator ledger when usage reaches the
+cap, clamped to 85% of the mounted filesystem so smaller volumes stay protected.
 
 ## Logs and state
 

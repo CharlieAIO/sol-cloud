@@ -26,6 +26,7 @@ var (
 	deployTicksPerSlot       uint64
 	deployComputeUnitLimit   uint64
 	deployLedgerLimitSize    uint64
+	deployLedgerDiskLimitGB  int
 	deployClonePrograms      []string
 	deployCloneAccounts      []string
 	deployCloneUpPrograms    []string
@@ -101,6 +102,7 @@ var deployCmd = &cobra.Command{
 			TicksPerSlot:             viper.GetUint64("validator.ticks_per_slot"),
 			ComputeUnitLimit:         viper.GetUint64("validator.compute_unit_limit"),
 			LedgerLimitSize:          viper.GetUint64("validator.ledger_limit_size"),
+			LedgerDiskLimitGB:        viper.GetInt("validator.ledger_disk_limit_gb"),
 			CloneRPCURL:              viper.GetString("validator.clone_rpc_url"),
 			ClonePrograms:            viper.GetStringSlice("validator.clone_programs"),
 			CloneAccounts:            viper.GetStringSlice("validator.clone_accounts"),
@@ -129,6 +131,9 @@ var deployCmd = &cobra.Command{
 		}
 		if deployLedgerLimitSize > 0 {
 			validatorCfg.LedgerLimitSize = deployLedgerLimitSize
+		}
+		if deployLedgerDiskLimitGB > 0 {
+			validatorCfg.LedgerDiskLimitGB = deployLedgerDiskLimitGB
 		}
 		if cmd.Flags().Changed("clone-program") {
 			validatorCfg.ClonePrograms = append([]string(nil), deployClonePrograms...)
@@ -205,11 +210,12 @@ var deployCmd = &cobra.Command{
 			fmt.Fprintf(cmd.OutOrStdout(), "artifacts:    %s\n", deployment.ArtifactsDir)
 			fmt.Fprintf(cmd.OutOrStdout(), "rpc endpoint: %s\n", deployment.RPCURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "ws endpoint:  %s\n", deployment.WebSocketURL)
-			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
+			fmt.Fprintf(cmd.OutOrStdout(), "validator:    slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d ledger_disk_limit_gb=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
 				validatorCfg.SlotsPerEpoch,
 				validatorCfg.TicksPerSlot,
 				validatorCfg.ComputeUnitLimit,
 				validatorCfg.LedgerLimitSize,
+				validatorCfg.LedgerDiskLimitGB,
 				len(validatorCfg.ClonePrograms),
 				len(validatorCfg.CloneAccounts),
 				len(validatorCfg.CloneUpgradeablePrograms),
@@ -233,11 +239,12 @@ var deployCmd = &cobra.Command{
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "🧩 App:        %s\n", deployment.Name)
 		fmt.Fprintf(cmd.OutOrStdout(), "📁 Artifacts:  %s\n", deployment.ArtifactsDir)
-		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
+		fmt.Fprintf(cmd.OutOrStdout(), "⚙️ Validator:  slots_per_epoch=%d ticks_per_slot=%d compute_unit_limit=%d ledger_limit_size=%d ledger_disk_limit_gb=%d clone_programs=%d clone=%d clone_upgradeable_program=%d\n",
 			validatorCfg.SlotsPerEpoch,
 			validatorCfg.TicksPerSlot,
 			validatorCfg.ComputeUnitLimit,
 			validatorCfg.LedgerLimitSize,
+			validatorCfg.LedgerDiskLimitGB,
 			len(validatorCfg.ClonePrograms),
 			len(validatorCfg.CloneAccounts),
 			len(validatorCfg.CloneUpgradeablePrograms),
@@ -288,6 +295,7 @@ func init() {
 	deployCmd.Flags().Uint64Var(&deployTicksPerSlot, "ticks-per-slot", 0, "override validator.ticks_per_slot")
 	deployCmd.Flags().Uint64Var(&deployComputeUnitLimit, "compute-unit-limit", 0, "override validator.compute_unit_limit")
 	deployCmd.Flags().Uint64Var(&deployLedgerLimitSize, "ledger-limit-size", 0, "override validator.ledger_limit_size")
+	deployCmd.Flags().IntVar(&deployLedgerDiskLimitGB, "ledger-disk-limit-gb", 0, "override validator.ledger_disk_limit_gb; ledger resets when disk usage reaches this cap")
 	deployCmd.Flags().StringSliceVar(&deployClonePrograms, "clone-program", nil, "program/account pubkey(s) to clone; type is auto-detected at runtime (upgradeable or plain)")
 	deployCmd.Flags().StringSliceVar(&deployCloneAccounts, "clone", nil, "repeatable account pubkey(s) to pass as --clone to solana-test-validator")
 	deployCmd.Flags().StringSliceVar(&deployCloneUpPrograms, "clone-upgradeable-program", nil, "repeatable program pubkey(s) to pass as --clone-upgradeable-program")

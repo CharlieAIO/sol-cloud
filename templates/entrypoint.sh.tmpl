@@ -5,6 +5,9 @@ SLOTS_PER_EPOCH="{{ .Validator.SlotsPerEpoch }}"
 TICKS_PER_SLOT="{{ .Validator.TicksPerSlot }}"
 COMPUTE_UNIT_LIMIT="{{ .Validator.ComputeUnitLimit }}"
 LEDGER_LIMIT_SIZE="{{ .Validator.LedgerLimitSize }}"
+LEDGER_DISK_LIMIT_GB="{{ .Validator.LedgerDiskLimitGB }}"
+LEDGER_MONITOR_INTERVAL_SECONDS="${LEDGER_MONITOR_INTERVAL_SECONDS:-30}"
+LEDGER_FILESYSTEM_HEADROOM_PERCENT="${LEDGER_FILESYSTEM_HEADROOM_PERCENT:-85}"
 PROGRAM_SO_PATH="{{ .Validator.ProgramDeploy.SOPath }}"
 PROGRAM_ID_KEYPAIR_PATH="{{ .Validator.ProgramDeploy.ProgramIDKeypairPath }}"
 UPGRADE_AUTHORITY_PATH="{{ .Validator.ProgramDeploy.UpgradeAuthorityPath }}"
@@ -106,88 +109,189 @@ airdrop_configured_accounts() {
 
 LEDGER_DIR="/var/lib/solana/ledger"
 
+positive_int() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
+ledger_usage_bytes() {
+  local kb
+  kb="$(du -sk "$LEDGER_DIR" 2>/dev/null | awk '{print $1}')"
+  if ! positive_int "$kb"; then
+    echo 0
+    return
+  fi
+  echo $((kb * 1024))
+}
+
+effective_ledger_limit_bytes() {
+  local configured_gb="$LEDGER_DISK_LIMIT_GB"
+  if ! positive_int "$configured_gb"; then
+    configured_gb=45
+  fi
+
+  local configured_bytes=$((configured_gb * 1024 * 1024 * 1024))
+  local fs_kb
+  fs_kb="$(df -Pk "$LEDGER_DIR" 2>/dev/null | awk 'NR==2 {print $2}')"
+  if positive_int "$fs_kb"; then
+    local headroom_percent="$LEDGER_FILESYSTEM_HEADROOM_PERCENT"
+    if ! positive_int "$headroom_percent" || (( headroom_percent > 99 )); then
+      headroom_percent=85
+    fi
+    local fs_limit_bytes=$((fs_kb * 1024 * headroom_percent / 100))
+    if (( fs_limit_bytes > 0 && fs_limit_bytes < configured_bytes )); then
+      configured_bytes="$fs_limit_bytes"
+    fi
+  fi
+
+  echo "$configured_bytes"
+}
+
+reset_ledger_dir() {
+  echo "clearing ledger data in $LEDGER_DIR"
+  mkdir -p "$LEDGER_DIR"
+  find "${LEDGER_DIR:?}" -mindepth 1 -delete 2>/dev/null || true
+}
+
+ledger_limit_exceeded() {
+  local usage_bytes limit_bytes
+  usage_bytes="$(ledger_usage_bytes)"
+  limit_bytes="$(effective_ledger_limit_bytes)"
+  if (( limit_bytes > 0 && usage_bytes >= limit_bytes )); then
+    echo "ledger disk usage ${usage_bytes} bytes reached limit ${limit_bytes} bytes"
+    return 0
+  fi
+  return 1
+}
+
 {{- if .Validator.ForceReset }}
 # --reset was passed to sol-cloud deploy; wipe the ledger contents so --clone
 # and other startup args are not silently ignored by solana-test-validator.
 # We clear the contents rather than the directory itself because the ledger
 # path is a volume mount point and cannot be removed.
 echo "force reset: clearing existing ledger data"
-find "${LEDGER_DIR:?}" -mindepth 1 -delete 2>/dev/null || true
+reset_ledger_dir
 {{- end }}
 
-# Check if ledger directory has existing data
-if [ -d "$LEDGER_DIR" ] && [ "$(ls -A $LEDGER_DIR 2>/dev/null)" ]; then
-  echo "Existing ledger data found, preserving state (skipping --reset)"
-  RESET_FLAG=""
-else
-  echo "No existing ledger data, starting fresh (using --reset)"
-  RESET_FLAG="--reset"
-fi
+start_validator() {
+  if ledger_limit_exceeded; then
+    reset_ledger_dir
+  fi
 
-args=(
-  --ledger /var/lib/solana/ledger
-  $RESET_FLAG
-  --bind-address 0.0.0.0
-  --url {{ .Validator.CloneRPCURL }}
-  --limit-ledger-size "$LEDGER_LIMIT_SIZE"
-  --slots-per-epoch "$SLOTS_PER_EPOCH"
-)
+  local reset_flag=()
+  if [ -d "$LEDGER_DIR" ] && [ "$(ls -A "$LEDGER_DIR" 2>/dev/null)" ]; then
+    echo "Existing ledger data found, preserving state (skipping --reset)"
+  else
+    echo "No existing ledger data, starting fresh (using --reset)"
+    reset_flag=(--reset)
+  fi
 
-if supports_flag --ticks-per-slot; then
-  args+=(--ticks-per-slot "$TICKS_PER_SLOT")
-else
-  echo "warning: this solana-test-validator build does not support --ticks-per-slot; continuing without it" >&2
-fi
+  args=(
+    --ledger "$LEDGER_DIR"
+    "${reset_flag[@]}"
+    --bind-address 0.0.0.0
+    --url {{ .Validator.CloneRPCURL }}
+    --limit-ledger-size "$LEDGER_LIMIT_SIZE"
+    --slots-per-epoch "$SLOTS_PER_EPOCH"
+  )
 
-if supports_flag --compute-unit-limit; then
-  args+=(--compute-unit-limit "$COMPUTE_UNIT_LIMIT")
-else
-  echo "warning: this solana-test-validator build does not support --compute-unit-limit; continuing without it" >&2
-fi
+  if supports_flag --ticks-per-slot; then
+    args+=(--ticks-per-slot "$TICKS_PER_SLOT")
+  else
+    echo "warning: this solana-test-validator build does not support --ticks-per-slot; continuing without it" >&2
+  fi
+
+  if supports_flag --compute-unit-limit; then
+    args+=(--compute-unit-limit "$COMPUTE_UNIT_LIMIT")
+  else
+    echo "warning: this solana-test-validator build does not support --compute-unit-limit; continuing without it" >&2
+  fi
 
 {{- range .Validator.ClonePrograms }}
-clone_program_auto "{{ . }}"
+  clone_program_auto "{{ . }}"
 {{- end }}
 
 {{- range .Validator.CloneAccounts }}
-if supports_flag --clone; then
-  args+=(--clone "{{ . }}")
-else
-  echo "warning: this solana-test-validator build does not support --clone; continuing without clone accounts" >&2
-fi
+  if supports_flag --clone; then
+    args+=(--clone "{{ . }}")
+  else
+    echo "warning: this solana-test-validator build does not support --clone; continuing without clone accounts" >&2
+  fi
 {{- end }}
 
 {{- range .Validator.CloneUpgradeablePrograms }}
-if supports_flag --clone-upgradeable-program; then
-  args+=(--clone-upgradeable-program "{{ . }}")
-else
-  echo "warning: this solana-test-validator build does not support --clone-upgradeable-program; continuing without clone upgradeable programs" >&2
-fi
+  if supports_flag --clone-upgradeable-program; then
+    args+=(--clone-upgradeable-program "{{ . }}")
+  else
+    echo "warning: this solana-test-validator build does not support --clone-upgradeable-program; continuing without clone upgradeable programs" >&2
+  fi
 {{- end }}
 
-solana-test-validator "${args[@]}" &
-validator_pid=$!
-nginx_pid=""
-
-cleanup() {
-  kill "${validator_pid:-}" "${nginx_pid:-}" 2>/dev/null || true
+  solana-test-validator "${args[@]}" &
+  validator_pid=$!
 }
 
-trap cleanup INT TERM EXIT
-
-if ! deploy_program_if_configured; then
-  exit 1
-fi
-
+run_startup_hooks() {
+  deploy_program_if_configured
 {{- if .Validator.AirdropAccounts }}
-airdrop_configured_accounts
+  airdrop_configured_accounts
 {{- end }}
+}
+
+restart_validator_with_fresh_ledger() {
+  echo "ledger disk limit exceeded; restarting validator with a fresh ledger"
+  kill "${validator_pid:-}" 2>/dev/null || true
+  wait "${validator_pid:-}" 2>/dev/null || true
+  reset_ledger_dir
+  start_validator
+  run_startup_hooks
+}
+
+start_validator
+nginx_pid=""
+monitor_sleep_pid=""
+
+cleanup() {
+  kill "${monitor_sleep_pid:-}" "${validator_pid:-}" "${nginx_pid:-}" 2>/dev/null || true
+}
+
+shutdown() {
+  cleanup
+  exit 0
+}
+
+trap shutdown INT TERM
+trap cleanup EXIT
+
+run_startup_hooks
 
 nginx -g 'daemon off;' &
 nginx_pid=$!
 
-wait -n "$validator_pid" "$nginx_pid"
-exit_code=$?
-cleanup
-wait "$validator_pid" "$nginx_pid" 2>/dev/null || true
-exit "$exit_code"
+while true; do
+  if ! kill -0 "$validator_pid" 2>/dev/null; then
+    set +e
+    wait "$validator_pid"
+    exit_code=$?
+    set -e
+    cleanup
+    exit "$exit_code"
+  fi
+
+  if ! kill -0 "$nginx_pid" 2>/dev/null; then
+    set +e
+    wait "$nginx_pid"
+    exit_code=$?
+    set -e
+    cleanup
+    exit "$exit_code"
+  fi
+
+  if ledger_limit_exceeded; then
+    restart_validator_with_fresh_ledger
+  fi
+
+  sleep "$LEDGER_MONITOR_INTERVAL_SECONDS" &
+  monitor_sleep_pid=$!
+  wait "$monitor_sleep_pid" || true
+  monitor_sleep_pid=""
+done

@@ -180,6 +180,11 @@ var initCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
+			ledgerDiskLimit, promptErr := utils.Uint64(reader, out, "Ledger disk limit GB", uint64(cfg.LedgerDiskLimitGB), true)
+			if promptErr != nil {
+				return promptErr
+			}
+			cfg.LedgerDiskLimitGB = int(ledgerDiskLimit)
 		}
 
 		clonePrograms, err := utils.StringList(reader, out, "Clone programs/accounts (optional, type auto-detected at runtime)", "Program/account pubkey")
@@ -244,6 +249,7 @@ validator:
   ticks_per_slot: %d
   compute_unit_limit: %d
   ledger_limit_size: %d
+  ledger_disk_limit_gb: %d
   clone_programs:
 %s
   airdrop_accounts:
@@ -252,7 +258,7 @@ validator:
     so_path: "%s"
     program_id_keypair: "%s"
     upgrade_authority: "%s"
-`, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cloneProgramsYAML, airdropYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
+`, providerName, escapedAppName, escapedRegion, cfg.SlotsPerEpoch, cfg.TicksPerSlot, cfg.ComputeUnitLimit, cfg.LedgerLimitSize, cfg.LedgerDiskLimitGB, cloneProgramsYAML, airdropYAML, escapedSOPath, escapedProgramIDKeypair, escapedUpgradeAuth)
 
 	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write config: %w", err)

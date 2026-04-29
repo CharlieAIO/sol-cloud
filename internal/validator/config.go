@@ -8,16 +8,18 @@ import (
 )
 
 const (
-	DefaultSlotsPerEpoch    uint64 = 432000
-	DefaultTicksPerSlot     uint64 = 64
-	DefaultComputeUnitLimit uint64 = 200000
-	DefaultLedgerLimitSize  uint64 = 10000
-	DefaultCloneRPCURL             = "https://api.mainnet-beta.solana.com"
+	DefaultSlotsPerEpoch     uint64 = 432000
+	DefaultTicksPerSlot      uint64 = 64
+	DefaultComputeUnitLimit  uint64 = 200000
+	DefaultLedgerLimitSize   uint64 = 10000
+	DefaultLedgerDiskLimitGB        = 45
+	DefaultCloneRPCURL              = "https://api.mainnet-beta.solana.com"
 
-	minSlotsPerEpoch    uint64 = 32
-	maxTicksPerSlot     uint64 = 1024
-	minComputeUnitLimit uint64 = 10000
-	minLedgerLimitSize  uint64 = 1
+	minSlotsPerEpoch     uint64 = 32
+	maxTicksPerSlot      uint64 = 1024
+	minComputeUnitLimit  uint64 = 10000
+	minLedgerLimitSize   uint64 = 1
+	minLedgerDiskLimitGB        = 1
 )
 
 var base58AddressPattern = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
@@ -36,6 +38,9 @@ type Config struct {
 	TicksPerSlot     uint64 `mapstructure:"ticks_per_slot" yaml:"ticks_per_slot"`
 	ComputeUnitLimit uint64 `mapstructure:"compute_unit_limit" yaml:"compute_unit_limit"`
 	LedgerLimitSize  uint64 `mapstructure:"ledger_limit_size" yaml:"ledger_limit_size"`
+	// LedgerDiskLimitGB caps the on-disk ledger directory. The entrypoint clamps
+	// this to the mounted filesystem size and resets the ledger when exceeded.
+	LedgerDiskLimitGB int `mapstructure:"ledger_disk_limit_gb" yaml:"ledger_disk_limit_gb"`
 	// ClonePrograms is the unified list of program/account addresses to clone.
 	// At runtime the validator entrypoint auto-detects whether each address is a
 	// BPF upgradeable program and uses --clone-upgradeable-program or --clone
@@ -84,6 +89,7 @@ func DefaultConfig() Config {
 		TicksPerSlot:             DefaultTicksPerSlot,
 		ComputeUnitLimit:         DefaultComputeUnitLimit,
 		LedgerLimitSize:          DefaultLedgerLimitSize,
+		LedgerDiskLimitGB:        DefaultLedgerDiskLimitGB,
 		CloneRPCURL:              DefaultCloneRPCURL,
 		ClonePrograms:            []string{},
 		CloneAccounts:            []string{},
@@ -109,6 +115,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.LedgerLimitSize == 0 {
 		c.LedgerLimitSize = DefaultLedgerLimitSize
+	}
+	if c.LedgerDiskLimitGB == 0 {
+		c.LedgerDiskLimitGB = DefaultLedgerDiskLimitGB
 	}
 	if strings.TrimSpace(c.CloneRPCURL) == "" {
 		c.CloneRPCURL = DefaultCloneRPCURL
@@ -148,6 +157,9 @@ func (c Config) Validate() error {
 	}
 	if c.LedgerLimitSize < minLedgerLimitSize {
 		return fmt.Errorf("ledger_limit_size must be >= %d", minLedgerLimitSize)
+	}
+	if c.LedgerDiskLimitGB < minLedgerDiskLimitGB {
+		return fmt.Errorf("ledger_disk_limit_gb must be >= %d", minLedgerDiskLimitGB)
 	}
 	if err := validateAddressList("clone_programs", c.ClonePrograms); err != nil {
 		return err
