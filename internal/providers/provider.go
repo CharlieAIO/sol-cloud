@@ -59,11 +59,12 @@ type airdropEntryTemplateData struct {
 
 // validatorTemplateData holds validator config fields used in templates.
 type validatorTemplateData struct {
-	SlotsPerEpoch    uint64
-	TicksPerSlot     uint64
-	ComputeUnitLimit uint64
-	LedgerLimitSize  uint64
-	CloneRPCURL      string
+	SlotsPerEpoch     uint64
+	TicksPerSlot      uint64
+	ComputeUnitLimit  uint64
+	LedgerLimitSize   uint64
+	LedgerDiskLimitGB int
+	CloneRPCURL       string
 	// ClonePrograms is the unified list; the entrypoint auto-detects upgradeable vs plain.
 	ClonePrograms []string
 	// Legacy fields kept for backwards compatibility.

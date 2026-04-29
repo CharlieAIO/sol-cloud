@@ -579,8 +579,10 @@ func deployViaRailwayCLI(ctx context.Context, token string, cfg *Config, artifac
 	// accidentally creating a duplicate project (e.g. when the project lives in a team
 	// workspace that the generic projects query doesn't always return).
 	// Always call ensureRailwayService so a deleted service is transparently recreated.
+	usedSavedID := false
 	if saved := tryLoadSavedRailwayIDs(artifactsDir); saved != nil {
 		projectID = saved.ProjectID
+		usedSavedID = true
 		logBuilder.WriteString(fmt.Sprintf("found existing project: %s\n", projectID))
 	} else {
 		projectID, err = ensureRailwayProject(ctx, client, graphqlURL, token, cfg.Name, cfg.OrgSlug, savedWorkspaceID)
@@ -592,7 +594,19 @@ func deployViaRailwayCLI(ctx context.Context, token string, cfg *Config, artifac
 
 	serviceID, err = ensureRailwayService(ctx, client, graphqlURL, token, projectID, "validator")
 	if err != nil {
-		return logBuilder.String(), "", "", "", err
+		// If we used a saved project ID and the project no longer exists, recreate it.
+		if usedSavedID && strings.Contains(strings.ToLower(err.Error()), "not found") {
+			logBuilder.WriteString(fmt.Sprintf("saved project %s not found, recreating...\n", projectID))
+			projectID, err = ensureRailwayProject(ctx, client, graphqlURL, token, cfg.Name, cfg.OrgSlug, savedWorkspaceID)
+			if err != nil {
+				return logBuilder.String(), "", "", "", err
+			}
+			logBuilder.WriteString(fmt.Sprintf("project ensured: %s\n", projectID))
+			serviceID, err = ensureRailwayService(ctx, client, graphqlURL, token, projectID, "validator")
+		}
+		if err != nil {
+			return logBuilder.String(), "", "", "", err
+		}
 	}
 	logBuilder.WriteString(fmt.Sprintf("service ensured: %s\n", serviceID))
 

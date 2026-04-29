@@ -93,6 +93,7 @@ func (p *FlyProvider) Deploy(ctx context.Context, cfg *Config) (*Deployment, err
 			TicksPerSlot:             cfg.Validator.TicksPerSlot,
 			ComputeUnitLimit:         cfg.Validator.ComputeUnitLimit,
 			LedgerLimitSize:          cfg.Validator.LedgerLimitSize,
+			LedgerDiskLimitGB:        cfg.Validator.LedgerDiskLimitGB,
 			CloneRPCURL:              cfg.Validator.CloneRPCURL,
 			ClonePrograms:            append([]string(nil), cfg.Validator.ClonePrograms...),
 			CloneAccounts:            append([]string(nil), cfg.Validator.CloneAccounts...),
